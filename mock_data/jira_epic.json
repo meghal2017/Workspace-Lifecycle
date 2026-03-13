@@ -1,0 +1,57 @@
+{
+  "id": "EPIC-001",
+  "key": "PROJ-42",
+  "summary": "Build AI-Powered Code Review Workspace",
+  "description": "Create a workspace that leverages LLMs to automatically review code, suggest improvements, and generate documentation. The system should integrate with GitHub, detect security vulnerabilities, and maintain a persistent review history.",
+  "status": "In Progress",
+  "priority": "High",
+  "reporter": "rajesh.kumar@acme.com",
+  "assignee": "meghal.gupta@acme.com",
+  "created": "2026-02-01T09:00:00Z",
+  "updated": "2026-02-23T18:00:00Z",
+  "labels": ["ai", "code-review", "workspace", "llm", "automation"],
+  "story_points": 34,
+  "sprint": "Sprint 12",
+  "assets": [
+    {
+      "asset_id": "ASSET-101",
+      "type": "github_repo",
+      "name": "acme/code-review-bot",
+      "url": "https://github.com/acme/code-review-bot",
+      "language": "Python",
+      "stars": 142,
+      "last_commit": "2026-02-22T14:30:00Z"
+    },
+    {
+      "asset_id": "ASSET-102",
+      "type": "design_doc",
+      "name": "Architecture Overview v3",
+      "url": "https://confluence.acme.com/display/ARCH/v3",
+      "format": "Confluence",
+      "last_updated": "2026-02-10T11:00:00Z"
+    },
+    {
+      "asset_id": "ASSET-103",
+      "type": "data_source",
+      "name": "Historical PR Dataset",
+      "url": "s3://acme-datasets/pr-history-2024.parquet",
+      "size_gb": 12.4,
+      "rows": 890000
+    },
+    {
+      "asset_id": "ASSET-104",
+      "type": "api_integration",
+      "name": "OpenAI GPT-4 API",
+      "endpoint": "https://api.openai.com/v1/chat/completions",
+      "model": "gpt-4-turbo",
+      "rate_limit_rpm": 500
+    }
+  ],
+  "acceptance_criteria": [
+    "System can review a PR in under 60 seconds",
+    "False positive rate on security flags < 5%",
+    "Supports Python, TypeScript, and Go codebases",
+    "Human reviewers can override AI suggestions via UI"
+  ],
+  "child_stories": ["PROJ-43", "PROJ-44", "PROJ-45", "PROJ-46"]
+}
