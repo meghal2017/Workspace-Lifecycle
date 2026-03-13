@@ -5,6 +5,18 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Define functions for the commands
+function setup-demo() {
+    "$DIR/bin/cli.sh" setup-demo "$@"
+}
+
+function teardown-demo() {
+    "$DIR/bin/cli.sh" teardown-demo "$@"
+}
+
+function cleanup-workspace() {
+    "$DIR/bin/cli.sh" cleanup-workspace "$@"
+}
+
 function load-epic() {
     "$DIR/bin/cli.sh" load-epic "$@"
 }
@@ -24,4 +36,7 @@ function close-epic() {
 echo "✅ Working shortcuts loaded into your current shell session!"
 echo ""
 echo "Try running:"
-echo "  load-epic EPIC-001"
+echo "  setup-demo"
+echo "  teardown-demo WL-1"
+echo "  cleanup-workspace"
+echo "  load-epic WL-10"

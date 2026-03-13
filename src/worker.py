@@ -66,6 +66,9 @@ logger = logging.getLogger("workspace-worker")
 
 
 async def main() -> None:
+    # Load .env file, overriding any stale bash session exports
+    load_dotenv(override=True)
+    
     address = TEMPORAL_ADDRESS or "localhost:7233"
     is_cloud = bool(TEMPORAL_API_KEY)
 

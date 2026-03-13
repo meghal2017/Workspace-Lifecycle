@@ -15,7 +15,6 @@ from typing import Any, Dict, List
 
 from temporalio import activity
 
-from mock_jira import JiraEpic, load_jira_epic
 import jira_client
 
 # ---------------------------------------------------------------------------
@@ -38,21 +37,45 @@ def _spec_path() -> str:
 @activity.defn
 async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
     """
-    Step 1 — Load the mock Jira Epic and return it as a serialisable dict.
-    In a real system this would call the Jira REST API.
+    Step 1 — Load the real Jira Epic and return it as a serialisable dict.
     """
     logger = activity.logger
-    logger.info(f"[ingest_jira_epic] Loading Jira Epic: {epic_id}")
+    logger.info(f"[ingest_jira_epic] Fetching real Jira issue: {epic_id}")
 
-    epic: JiraEpic = load_jira_epic(epic_id)
-
-    # Convert to plain dict (Temporal serialises via JSON)
-    result = asdict(epic)
+    # 1. Fetch main issue
+    issue_data = await jira_client.get_issue(epic_id)
+    fields = issue_data.get("fields", {})
+    
+    # 2. Fetch child issues
+    child_issues = await jira_client.get_child_issues(epic_id)
+    child_stories = [f"{child['key']} - {child.get('fields', {}).get('summary', '')}" for child in child_issues]
+    
+    # 3. Parse ADF description
+    description_text = jira_client.adf_to_text(fields.get("description"))
+    
+    priority_name = fields.get("priority", {}).get("name", "Medium") if fields.get("priority") else "Medium"
+    status_name = fields.get("status", {}).get("name", "To Do") if fields.get("status") else "To Do"
+    
+    epic = {
+        "id": issue_data.get("id", ""),
+        "key": issue_data.get("key", epic_id),
+        "summary": fields.get("summary", ""),
+        "description": description_text,
+        "assets": [],  # Could be pulled from attachment fields
+        "acceptance_criteria": [], # Often kept in description or custom fields
+        "status": status_name,
+        "priority": priority_name,
+        "sprint": "Active Sprint",
+        "story_points": 5,
+        "labels": fields.get("labels", []),
+        "child_stories": child_stories
+    }
+    
     logger.info(
-        f"[ingest_jira_epic] Loaded epic '{epic.summary}' "
-        f"with {len(epic.assets)} assets and {len(epic.child_stories)} child stories."
+        f"[ingest_jira_epic] Loaded epic '{epic['summary']}' "
+        f"with {len(epic['assets'])} assets and {len(epic['child_stories'])} child stories."
     )
-    return result
+    return epic
 
 
 # ---------------------------------------------------------------------------

@@ -25,12 +25,13 @@ import httpx
 def _base_url() -> str:
     return os.environ.get("JIRA_BASE_URL", "").rstrip("/")
 
-def _auth_headers() -> Dict[str, str]:
-    email = os.environ["JIRA_USER_EMAIL"]
-    token = os.environ["JIRA_API_TOKEN"]
-    creds = base64.b64encode(f"{email}:{token}".encode()).decode()
+def _auth_tuple() -> tuple:
+    email = os.environ["JIRA_USER_EMAIL"].strip()
+    token = os.environ["JIRA_API_TOKEN"].strip()
+    return (email, token)
+
+def _headers() -> Dict[str, str]:
     return {
-        "Authorization": f"Basic {creds}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -58,22 +59,125 @@ def _adf_text(text: str) -> Dict[str, Any]:
     return {"type": "doc", "version": 1, "content": paragraphs}
 
 
+def adf_to_text(adf: Optional[Dict[str, Any]]) -> str:
+    """Parse a Jira ADF document back to a simplified plain text/markdown string."""
+    if not adf or adf.get("type") != "doc":
+        return ""
+    
+    lines = []
+    for block in adf.get("content", []):
+        block_type = block.get("type")
+        if block_type in ("paragraph", "heading"):
+            node_text = ""
+            for node in block.get("content", []):
+                if node.get("type") == "text":
+                    text = node.get("text", "")
+                    # Add simple markdown formatting for bold/italic if present
+                    marks = [m.get("type") for m in node.get("marks", [])]
+                    if "strong" in marks:
+                        text = f"**{text}**"
+                    if "em" in marks:
+                        text = f"*{text}*"
+                    node_text += text
+                elif node.get("type") == "hardBreak":
+                    node_text += "\n"
+            
+            if block_type == "heading":
+                level = block.get("attrs", {}).get("level", 1)
+                lines.append(f"{'#' * level} {node_text}\n")
+            else:
+                lines.append(f"{node_text}\n")
+        elif block_type == "bulletList" or block_type == "orderedList":
+            # Simplified list rendering
+            for i, li in enumerate(block.get("content", [])):
+                if li.get("type") == "listItem":
+                    # Just grab text from the first paragraph of the list item
+                    li_text = ""
+                    for li_content in li.get("content", []):
+                        if li_content.get("type") == "paragraph":
+                            for node in li_content.get("content", []):
+                                if node.get("type") == "text":
+                                    li_text += node.get("text", "")
+                    
+                    prefix = "- " if block_type == "bulletList" else f"{i+1}. "
+                    lines.append(f"{prefix}{li_text}")
+            lines.append("")
+        elif block_type == "rule":
+            lines.append("---\n")
+            
+    return "\n".join(lines).strip()
+
+
 async def get_issue(issue_key: str) -> Dict[str, Any]:
     """Fetch a Jira issue and return the raw JSON dict."""
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}"
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers=_auth_headers())
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.get(url, headers=_headers())
         resp.raise_for_status()
         return resp.json()
+
+
+async def search_issues(jql: str) -> List[Dict[str, Any]]:
+    """Search for issues using JQL."""
+    url = f"{_base_url()}/rest/api/3/search/jql"
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.get(url, headers=_headers(), params={"jql": jql, "maxResults": 100})
+        resp.raise_for_status()
+        
+        # New API only returns IDs
+        ids = [i["id"] for i in resp.json().get("issues", [])]
+        
+        issues = []
+        for issue_id in ids:
+            issue_data = await get_issue(issue_id)
+            issues.append(issue_data)
+            
+        return issues
+
+
+async def get_child_issues(epic_key: str) -> List[Dict[str, Any]]:
+    """Fetch the child issues (stories/tasks) belonging to an Epic."""
+    jql = f'parent = "{epic_key}" OR issue in linkedIssues("{epic_key}")'
+    return await search_issues(jql)
+
+
+async def delete_issue(issue_key: str) -> None:
+    """Delete a Jira issue."""
+    url = f"{_base_url()}/rest/api/3/issue/{issue_key}"
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.delete(url, headers=_headers())
+        resp.raise_for_status()
+
+
+async def create_issue(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new Jira issue with the given fields."""
+    url = f"{_base_url()}/rest/api/3/issue"
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.post(url, headers=_headers(), json={"fields": fields})
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def link_issue(inward_key: str, outward_key: str, link_type_name: str = "Relates") -> None:
+    """Create an issue link between two issues."""
+    url = f"{_base_url()}/rest/api/3/issueLink"
+    payload = {
+        "type": {"name": link_type_name},
+        "inwardIssue": {"key": inward_key},
+        "outwardIssue": {"key": outward_key}
+    }
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.post(url, headers=_headers(), json=payload)
+        resp.raise_for_status()
 
 
 async def add_comment(issue_key: str, text: str) -> None:
     """Post a plain-text comment on a Jira issue."""
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/comment"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.post(
             url,
-            headers=_auth_headers(),
+            headers=_headers(),
             json={"body": _adf_text(text)},
         )
         resp.raise_for_status()
@@ -82,8 +186,8 @@ async def add_comment(issue_key: str, text: str) -> None:
 async def get_transitions(issue_key: str) -> List[Dict[str, Any]]:
     """Return available workflow transitions for a Jira issue."""
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/transitions"
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers=_auth_headers())
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
+        resp = await client.get(url, headers=_headers())
         resp.raise_for_status()
         return resp.json().get("transitions", [])
 
@@ -91,10 +195,10 @@ async def get_transitions(issue_key: str) -> List[Dict[str, Any]]:
 async def transition_issue(issue_key: str, transition_id: str) -> None:
     """Transition a Jira issue (e.g. move to Done)."""
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/transitions"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.post(
             url,
-            headers=_auth_headers(),
+            headers=_headers(),
             json={"transition": {"id": transition_id}},
         )
         resp.raise_for_status()

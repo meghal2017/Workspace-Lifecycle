@@ -21,23 +21,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 @pytest.fixture()
 def sample_epic() -> dict:
-    """Load the real mock Jira JSON as a dict, same shape activities receive."""
-    data_path = os.path.join(
-        os.path.dirname(__file__), "..", "mock_data", "jira_epic.json"
-    )
-    with open(data_path) as f:
-        raw = json.load(f)
-
-    # Massage assets to match the dataclass-serialised form (extra field)
-    assets = []
-    for a in raw.get("assets", []):
-        extra = {k: v for k, v in a.items() if k not in ("asset_id", "type", "name", "url", "endpoint")}
-        assets.append({
-            "asset_id": a["asset_id"], "type": a["type"],
-            "name": a["name"], "url": a.get("url", a.get("endpoint", "")), "extra": extra,
-        })
-    raw["assets"] = assets
-    return raw
+    """Return a hardcoded mock epic context for tests so we don't need real Jira."""
+    return {
+        "id": "12345",
+        "key": "EPIC-001",
+        "summary": "Mock Epic Summary",
+        "description": "Mock description text.",
+        "assets": [{"name": "Design Doc", "type": "pdf", "url": "http://mock"}],
+        "acceptance_criteria": [],
+        "status": "To Do",
+        "priority": "High",
+        "sprint": "Active Sprint",
+        "story_points": 5,
+        "labels": ["backend"],
+        "child_stories": ["TASK-1 - Scaffold API"]
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -53,19 +51,35 @@ def use_tmp_specs(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestIngestJiraEpic:
-    def test_returns_dict_with_expected_keys(self):
+    @pytest.mark.asyncio
+    async def test_fetches_from_jira_client(self, monkeypatch):
+        import jira_client
+        
+        async def mock_get_issue(epic_id):
+            return {
+                "id": "999", 
+                "key": epic_id, 
+                "fields": {
+                    "summary": "Live Mock Epic", 
+                    "description": {"type": "doc", "content": []}
+                }
+            }
+            
+        async def mock_get_child_issues(epic_id):
+            return [{"key": "TASK-1", "fields": {"summary": "Mock Task"}}]
+            
+        monkeypatch.setattr(jira_client, "get_issue", mock_get_issue)
+        monkeypatch.setattr(jira_client, "get_child_issues", mock_get_child_issues)
+        
         from activities import ingest_jira_epic
-        result = asyncio.run(ingest_jira_epic("EPIC-001"))
+        result = await ingest_jira_epic("EPIC-001")
+        
         assert isinstance(result, dict)
-        assert result["id"] == "EPIC-001"
-        assert "summary" in result
-        assert "assets" in result
-        assert len(result["assets"]) > 0
-
-    def test_raises_on_wrong_epic_id(self):
-        from activities import ingest_jira_epic
-        with pytest.raises(ValueError, match="Epic ID mismatch"):
-            asyncio.run(ingest_jira_epic("EPIC-999"))
+        assert result["id"] == "999"
+        assert result["key"] == "EPIC-001"
+        assert result["summary"] == "Live Mock Epic"
+        assert len(result["child_stories"]) == 1
+        assert "TASK-1 - Mock Task" in result["child_stories"][0]
 
 
 class TestGenerateSpecV1:
