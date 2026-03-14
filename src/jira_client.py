@@ -202,3 +202,41 @@ async def transition_issue(issue_key: str, transition_id: str) -> None:
             json={"transition": {"id": transition_id}},
         )
         resp.raise_for_status()
+
+
+async def _find_transition(issue_key: str, target_states: List[str]) -> Optional[str]:
+    """Return the ID of the first available transition matching the target states."""
+    transitions = await get_transitions(issue_key)
+    target_states_lower = [s.lower() for s in target_states]
+    
+    for t in transitions:
+        name = t.get("name", "").lower()
+        if any(target in name for target in target_states_lower):
+            return t["id"]
+    return None
+
+
+async def transition_to_in_progress(issue_key: str) -> bool:
+    """Attempt to transition an issue to an active 'In Progress' state.
+    Returns True if successfully transitioned, False if no matching transition was found.
+    """
+    targets = ["in progress", "start progress", "active", "doing", "open"]
+    transition_id = await _find_transition(issue_key, targets)
+    if not transition_id:
+        return False
+        
+    await transition_issue(issue_key, transition_id)
+    return True
+
+
+async def transition_to_done(issue_key: str) -> bool:
+    """Attempt to transition an issue to a terminal 'Done' state.
+    Returns True if successfully transitioned, False if no matching transition was found.
+    """
+    targets = ["done", "closed", "resolved", "completed"]
+    transition_id = await _find_transition(issue_key, targets)
+    if not transition_id:
+        return False
+        
+    await transition_issue(issue_key, transition_id)
+    return True

@@ -50,6 +50,15 @@ async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
     child_issues = await jira_client.get_child_issues(epic_id)
     child_stories = [f"{child['key']} - {child.get('fields', {}).get('summary', '')}" for child in child_issues]
     
+    # 2b. Transition epic and children to "In Progress"
+    if jira_client.jira_enabled():
+        logger.info(f"[ingest_jira_epic] Transitioning {epic_id} and children to In Progress...")
+        await jira_client.transition_to_in_progress(epic_id)
+        for child in child_issues:
+            await jira_client.transition_to_in_progress(child["key"])
+    else:
+        logger.info(f"[ingest_jira_epic] [MOCK] Transitioning {epic_id} and {len(child_issues)} children to In Progress")
+    
     # 3. Parse ADF description
     description_text = jira_client.adf_to_text(fields.get("description"))
     
@@ -284,12 +293,20 @@ async def update_jira_comment(epic_id: str, summary_comment: str) -> str:
     )
 
     if jira_client.jira_enabled():
+        # Comment on the Epic
         await jira_client.add_comment(epic_id, comment_text)
-        logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to {epic_id}")
+        logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to Epic {epic_id}")
+        
+        # Comment on all connected child stories
+        child_issues = await jira_client.get_child_issues(epic_id)
+        for child in child_issues:
+            child_key = child["key"]
+            await jira_client.add_comment(child_key, comment_text)
+            logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to Child {child_key}")
     else:
-        logger.info(f"[update_jira_comment] [MOCK] Jira comment:\n{comment_text}")
+        logger.info(f"[update_jira_comment] [MOCK] Jira comment for {epic_id} and its children:\n{comment_text}")
 
-    return f"Jira comment posted to {epic_id} at {now}"
+    return f"Jira comment posted to {epic_id} and children at {now}"
 
 
 # ---------------------------------------------------------------------------
@@ -314,20 +331,28 @@ async def close_jira_issue(epic_id: str, final_comment: str) -> str:
     )
 
     if jira_client.jira_enabled():
+        # Close Epic
         await jira_client.add_comment(epic_id, comment_text)
-        transition_id = os.environ.get("JIRA_DONE_TRANSITION_ID", "")
-        if transition_id:
-            await jira_client.transition_issue(epic_id, transition_id)
-            logger.info(f"[close_jira_issue] ✅ Jira issue {epic_id} transitioned to Done")
+        success = await jira_client.transition_to_done(epic_id)
+        if success:
+            logger.info(f"[close_jira_issue] ✅ Jira Epic {epic_id} transitioned to Done")
         else:
-            logger.warning(
-                "[close_jira_issue] JIRA_DONE_TRANSITION_ID not set — skipping transition. "
-                "Run: python3 src/starter.py --jira-transitions <ISSUE_KEY> to find yours."
-            )
-    else:
-        logger.info(f"[close_jira_issue] [MOCK] Jira close:\n{comment_text}")
+            logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for Epic {epic_id}")
 
-    return f"Jira issue {epic_id} closed at {now}"
+        # Close all connected child stories
+        child_issues = await jira_client.get_child_issues(epic_id)
+        for child in child_issues:
+            child_key = child["key"]
+            await jira_client.add_comment(child_key, comment_text)
+            child_success = await jira_client.transition_to_done(child_key)
+            if child_success:
+                logger.info(f"[close_jira_issue] ✅ Jira Child {child_key} transitioned to Done")
+            else:
+                logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for Child {child_key}")
+    else:
+        logger.info(f"[close_jira_issue] [MOCK] Jira close for {epic_id} and its children:\n{comment_text}")
+
+    return f"Jira issue {epic_id} and children closed at {now}"
 
 
 # ---------------------------------------------------------------------------
