@@ -9,11 +9,11 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import jira_client
-from dotenv import load_dotenv
+from env_loader import load_env
 
 
 async def main():
-    load_dotenv(override=True)
+    load_env(override=True)
     if not jira_client.jira_enabled():
         print("❌ Error: Jira credentials not set in environment.")
         sys.exit(1)

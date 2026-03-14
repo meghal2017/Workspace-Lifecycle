@@ -29,8 +29,9 @@ import logging
 import os
 import sys
 
-from dotenv import load_dotenv
-load_dotenv()
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from env_loader import load_env
+load_env(override=True)  # Always override stale shell env exports
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -67,7 +68,7 @@ logger = logging.getLogger("workspace-worker")
 
 async def main() -> None:
     # Load .env file, overriding any stale bash session exports
-    load_dotenv(override=True)
+    load_env(override=True)
     
     address = TEMPORAL_ADDRESS or "localhost:7233"
     is_cloud = bool(TEMPORAL_API_KEY)

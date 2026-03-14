@@ -9,7 +9,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import jira_client
-from dotenv import load_dotenv
+from env_loader import load_env
 import httpx
 from datetime import datetime, timezone, timedelta
 
@@ -74,7 +74,7 @@ async def add_to_active_sprint(project_key: str, issue_keys: list):
 
 
 async def main():
-    load_dotenv(override=True)
+    load_env(override=True)
     if not jira_client.jira_enabled():
         print("❌ Error: Jira credentials not set in environment.")
         print("Please check your .env file and ensure JIRA_BASE_URL, JIRA_USER_EMAIL, and JIRA_API_TOKEN are set.")
