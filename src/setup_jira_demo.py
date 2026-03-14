@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
 setup_jira_demo.py — Programmatically creates a demo Jira Epic and child tasks.
+Supports multiple rich scenarios.
 """
 import asyncio
 import os
 import sys
+import random
+import argparse
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -12,6 +15,88 @@ import jira_client
 from env_loader import load_env
 import httpx
 from datetime import datetime, timezone, timedelta
+
+# ---------------------------------------------------------------------------
+# Scenario Registry
+# ---------------------------------------------------------------------------
+
+SCENARIOS = {
+    "profile": {
+        "summary": "Feature: User Profile Management",
+        "description": "As a user, I want to manage my personal information, notification preferences, and billing details in one place.",
+        "acceptance_criteria": [
+            "User can view their avatar, name, and email.",
+            "User can update notification toggles (Email/SMS).",
+            "Billing history displays a list of recent transactions.",
+            "Mobile-responsive design across all breakpoints."
+        ],
+        "labels": ["frontend", "profile", "v1.0"],
+        "children": [
+            {
+                "summary": "UI: Build Profile React Component",
+                "desc": "Develop the React frontend with state management for profile forms."
+            },
+            {
+                "summary": "Backend: Add GET/PUT /api/user/profile Endpoints",
+                "desc": "Implement Node.js/Python endpoints with database integration."
+            },
+            {
+                "summary": "Testing: E2E Cypress Tests for Profile",
+                "desc": "Automated regression suite for name updates and validation errors."
+            }
+        ]
+    },
+    "auth": {
+        "summary": "Security: Multi-Factor Authentication (MFA)",
+        "description": "Improve platform security by implementing Time-based One-Time Password (TOTP) for all administrative accounts.",
+        "acceptance_criteria": [
+            "Enable TOTP secret generation via QR code.",
+            "Enforce MFA challenge on login for 'Admin' role.",
+            "Provide backup recovery codes for users.",
+            "Audit logs must record all MFA enablement events."
+        ],
+        "labels": ["security", "auth", "critical"],
+        "children": [
+            {
+                "summary": "Logic: TOTP Secret Generation & QR API",
+                "desc": "Implement the core vault logic for secret storage and QR code generation."
+            },
+            {
+                "summary": "UI: MFA Setup & Verification Screens",
+                "desc": "Design the setup flow and the challenge prompt UI."
+            },
+            {
+                "summary": "Audit: Integration with Security Logs",
+                "desc": "Ensure all MFA attempts are logged for compliance monitoring."
+            }
+        ]
+    },
+    "search": {
+        "summary": "Platform: Semantic Product Search",
+        "description": "Replace existing keyword search with a vector-based semantic search to improve discovery relevance.",
+        "acceptance_criteria": [
+            "Support natural language queries (e.g., 'warm winter gear').",
+            "Latency must remain under 200ms for 95th percentile.",
+            "Integrate with Pinecone/Milvus vector database.",
+            "Highlight relevant keywords in search results."
+        ],
+        "labels": ["platform", "search", "ai"],
+        "children": [
+            {
+                "summary": "Infra: Provision Vector DB & Indexing",
+                "desc": "Set up the vector database and pipeline for product indexing."
+            },
+            {
+                "summary": "Model: Deploy Embedding Inference Service",
+                "desc": "Host the NLP model to convert queries into vectors."
+            },
+            {
+                "summary": "UI: New Search Results Layout",
+                "desc": "Build a modern masonry-style grid for displayed products."
+            }
+        ]
+    }
+}
 
 async def add_to_active_sprint(project_key: str, issue_keys: list):
     """Attempt to find the project board and move issues into an active sprint."""
@@ -23,141 +108,104 @@ async def add_to_active_sprint(project_key: str, issue_keys: list):
 
     print("\n3️⃣  Moving issues to the Active Board (Sprint)...")
     async with httpx.AsyncClient(auth=auth) as c:
-        # 1. Find the board
-        r = await c.get(f"{base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}", headers=headers)
-        if r.status_code != 200:
-            print("   ⚠️ Could not fetch Jira Agile boards. Issues may reside in backlog.")
-            return
+        try:
+            r = await c.get(f"{base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}", headers=headers)
+            if r.status_code != 200:
+                print("   ⚠️ Could not fetch Jira Agile boards.")
+                return
+                
+            boards = r.json().get("values", [])
+            if not boards: return
             
-        boards = r.json().get("values", [])
-        if not boards:
-            print("   ⚠️ No boards found for this project.")
-            return
-        
-        board_id = boards[0]["id"]
-        
-        # 2. Find sprints for the board
-        r = await c.get(f"{base_url}/rest/agile/1.0/board/{board_id}/sprint", headers=headers)
-        sprints = r.json().get("values", [])
-        if not sprints:
-            print("   ⚠️ No Sprints found on this board. Active Board may be disabled.")
-            return
+            board_id = boards[0]["id"]
+            r = await c.get(f"{base_url}/rest/agile/1.0/board/{board_id}/sprint", headers=headers)
+            sprints = r.json().get("values", [])
+            if not sprints: return
 
-        # 3. Prefer an active sprint, else take the first future sprint
-        active_sprint = next((s for s in sprints if s["state"] == "active"), None)
-        sprint_to_use = active_sprint or sprints[0]
-        sprint_id = sprint_to_use["id"]
-        
-        # 4. Move issues
-        r = await c.post(
-            f"{base_url}/rest/agile/1.0/sprint/{sprint_id}/issue", 
-            headers=headers, 
-            json={"issues": issue_keys}
-        )
-        if r.status_code < 400:
-            print(f"   ✅ Moved issues to Sprint '{sprint_to_use['name']}'")
-        
-        # 5. If sprint is not active, attempt to start it
-        if sprint_to_use["state"] != "active":
-            now = datetime.now(timezone.utc)
-            end = now + timedelta(days=14)
-            payload = {
-                "state": "active",
-                "startDate": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                "endDate": end.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            }
-            r = await c.post(f"{base_url}/rest/agile/1.0/sprint/{sprint_id}", headers=headers, json=payload)
-            if r.status_code == 200:
-                print(f"   ✅ Activated Sprint '{sprint_to_use['name']}'")
-            else:
-                print(f"   ⚠️ Sprint assigned, but could not autostart it. You may need to click 'Start Sprint' in Jira.")
-
+            active_sprint = next((s for s in sprints if s["state"] == "active"), None)
+            sprint_to_use = active_sprint or sprints[0]
+            sprint_id = sprint_to_use["id"]
+            
+            await c.post(f"{base_url}/rest/agile/1.0/sprint/{sprint_id}/issue", headers=headers, json={"issues": issue_keys})
+            print(f"   ✅ Moved to Sprint '{sprint_to_use['name']}'")
+        except Exception as e:
+            print(f"   ⚠️ Agile/Sprint move failed: {e}")
 
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scenario", help="Specific scenario key (profile, auth, search)")
+    args = parser.parse_args()
+
     load_env(override=True)
     if not jira_client.jira_enabled():
-        print("❌ Error: Jira credentials not set in environment.")
-        print("Please check your .env file and ensure JIRA_BASE_URL, JIRA_USER_EMAIL, and JIRA_API_TOKEN are set.")
+        print("❌ Error: Jira credentials not set.")
         sys.exit(1)
 
     project_key = os.environ.get("JIRA_PROJECT_KEY")
     if not project_key:
-        print("❌ Error: JIRA_PROJECT_KEY not found in environment.")
+        print("❌ Error: JIRA_PROJECT_KEY not found.")
         sys.exit(1)
 
-    print(f"🚀 Connecting to Jira to set up a demo Epic in project '{project_key}'...\n")
+    # 1. Select Scenario
+    s_key = args.scenario if args.scenario in SCENARIOS else random.choice(list(SCENARIOS.keys()))
+    scenario = SCENARIOS[s_key]
+    print(f"🚀 Setting up scenario: [{s_key.upper()}] - {scenario['summary']}\n")
 
-    # 1. Create the parent Epic
-    # We use type 'Task' or 'Story' as a fallback if 'Epic' gives custom-field errors,
-    # but let's attempt 'Epic' first. If it's a Company-managed project it might fail
-    # without 'Epic Name', but Team-managed projects allow it.
-    # To be universally safe for the demo, we'll create a "Story" and link sub-tasks
-    # or just normal tasks to it. The workflow just needs an issue key.
-    
+    # 2. Format Description with Acceptance Criteria
+    desc_body = scenario['description'] + "\n\n**Acceptance Criteria:**\n"
+    for ac in scenario['acceptance_criteria']:
+        desc_body += f"- {ac}\n"
+
+    # 3. Create Parent Epic
     parent_fields = {
         "project": {"key": project_key},
-        "summary": "Implement Unified Authentication Gateway",
-        "description": jira_client._adf_text(
-            "As a platform engineer, I need a unified authentication gateway to standardize "
-            "login across all microservices.\n\n"
-            "Acceptance Criteria:\n"
-            "- Must support OAuth2 and SAML.\n"
-            "- Latency under 50ms.\n"
-            "- High availability (99.99%)."
-        ),
-        "issuetype": {"name": "Story"},
+        "summary": scenario["summary"],
+        "description": jira_client._adf_text(desc_body),
+        "issuetype": {"name": "Epic"},
+        "labels": scenario["labels"]
     }
 
     try:
-        print("1️⃣  Creating Parent Issue (Story)...")
+        print("1️⃣  Creating Parent Epic...")
         parent_resp = await jira_client.create_issue(parent_fields)
         parent_key = parent_resp["key"]
-        print(f"   ✅ Created Parent: {parent_key}")
+        print(f"   ✅ Created: {parent_key}")
     except Exception as e:
-        print(f"   ❌ Failed to create parent issue. Is the JIRA_PROJECT_KEY correct? Error: {e}")
+        print(f"   ❌ Failed to create Epic: {e}")
         sys.exit(1)
 
-    # 2. Create child issues
-    child_summaries = [
-        "Create database schemas for Auth profiles",
-        "Implement OAuth2 token exchange endpoints",
-        "Write integration tests for SAML provider"
-    ]
-
+    # 4. Create Child Stories
     child_keys = []
-    print("\n2️⃣  Creating Child Issues...")
-    for idx, summary in enumerate(child_summaries, 1):
+    print("\n2️⃣  Creating Subtasks...")
+    for story in scenario["children"]:
+        desc = story["desc"]
+        if story.get("plan_steps"):
+            desc += "\n\n**Implementation Plan:**\n"
+            for step in story["plan_steps"]:
+                desc += f"- {step}\n"
+
         child_fields = {
             "project": {"key": project_key},
-            "summary": summary,
-            "description": jira_client._adf_text(f"Detailed implementation for: {summary}"),
-            "issuetype": {"name": "Task"},
-            # Modern Jira allows setting parent directly on creation for sub-tasks or linked hierarchy
-            "parent": {"key": parent_key}
+            "summary": story["summary"],
+            "description": jira_client._adf_text(desc),
+            "issuetype": {"name": "Story"},
+            "labels": scenario["labels"]
         }
         try:
-            # We will try to create with parent set. If it fails (e.g. issues types don't allow parent),
-            # we will create without parent and link them.
             child_resp = await jira_client.create_issue(child_fields)
-            child_keys.append(child_resp['key'])
-            print(f"   ✅ Created Child {idx}: {child_resp['key']}")
-        except Exception:
-            # Fallback to creating independently and linking
-            del child_fields["parent"]
-            child_resp = await jira_client.create_issue(child_fields)
-            child_key = child_resp['key']
-            child_keys.append(child_key)
-            print(f"   ✅ Created Child {idx}: {child_key} (Linking...)")
-            await jira_client.link_issue(inward_key=parent_key, outward_key=child_key, link_type_name="Relates")
+            ckey = child_resp['key']
+            child_keys.append(ckey)
+            await jira_client.link_issue(ckey, parent_key, "Relates")
+            print(f"   ✅ Created Child: {ckey}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to create/link child: {e}")
 
-    # Move all newly created issues to an Active Sprint
+    # 5. Agile Cleanup
     await add_to_active_sprint(project_key, [parent_key] + child_keys)
 
-    print(f"\n🎉 Demo setup complete! Your environment is ready.")
-    print("-" * 50)
-    print(f"Next step: Run the full workflow on this issue:")
-    print(f"  load-epic {parent_key}")
-    print("-" * 50)
+    print(f"\n🎉 Demo setup complete! Scenario: {s_key}")
+    print(f"Next step: ./bin/cli.sh load-epic {parent_key}")
 
 if __name__ == "__main__":
     asyncio.run(main())
+

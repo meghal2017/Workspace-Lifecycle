@@ -8,18 +8,16 @@ STARTER="python3 $DIR/src/starter.py"
 
 function show_help {
     echo "Usage:"
-    echo "  setup-demo                               - Create a real dummy Epic in your Jira project"
+    echo "  setup-demo                               - Create a real dummy Epic and 3 Story child-tasks in Jira"
+    echo "  load-epic <Epic Name>                    - Start workflow and generate Initial Spec"
+    echo "  query <Epic Name>                        - Query the current phase of the workflow"
+    echo "  approve-plan <Epic Name>                 - Approve the implementation plan to begin agent tasks"
+
+    echo "  approve-subtask <Epic Name> <Subtask ID> - Approve a specific agent resolution"
+    echo "  close-epic <Epic Name> -comment <Text>   - Final human approval and archive workspace"
     echo "  teardown-demo <Epic Name>                - Delete a specific test Epic and its child tasks"
     echo "  cleanup-workspace                        - DANGEROUS: Wipe ALL issues from the Jira project"
-    echo "  load-epic <Epic Name>                    - Start workflow and generate Spec v1"
-    echo "  start-work <Epic Name>                   - Trigger analysis agents"
-    echo "  approve-work <Epic Name> -comment <Text> - Approve agent results"
-    echo "  close-epic <Epic Name> -comment <Text>   - Final human approval and close"
     echo ""
-    echo "Example:"
-    echo "  ./bin/cli.sh setup-demo"
-    echo "  ./bin/cli.sh teardown-demo WL-1"
-    echo "  ./bin/cli.sh load-epic WL-10"
 }
 
 if [ -z "$1" ]; then
@@ -30,7 +28,11 @@ fi
 COMMAND=$1
 
 if [ "$COMMAND" == "setup-demo" ]; then
-    python3 "$DIR/src/setup_jira_demo.py"
+    if [ "$2" == "--scenario" ] && [ -n "$3" ]; then
+        python3 "$DIR/src/setup_jira_demo.py" --scenario "$3"
+    else
+        python3 "$DIR/src/setup_jira_demo.py"
+    fi
     exit 0
 fi
 
@@ -69,15 +71,20 @@ case $COMMAND in
     load-epic)
         $STARTER --load-epic "$EPIC_NAME"
         ;;
-    start-work)
-        $STARTER --start-work "$WORKFLOW_ID"
+    query)
+        $STARTER --query "$WORKFLOW_ID"
         ;;
-    approve-work)
-        if [ -z "$COMMENT" ]; then
-            $STARTER --approve-work "$WORKFLOW_ID"
-        else
-            $STARTER --approve-work "$WORKFLOW_ID" --comment "$COMMENT"
+    approve-plan)
+
+        $STARTER --approve-plan "$WORKFLOW_ID"
+        ;;
+    approve-subtask)
+        SUBTASK_ID=$3
+        if [ -z "$SUBTASK_ID" ]; then
+            echo "Error: <Subtask ID> is required for approve-subtask."
+            exit 1
         fi
+        $STARTER --approve-subtask "$WORKFLOW_ID" "$SUBTASK_ID"
         ;;
     close-epic)
         if [ -z "$COMMENT" ]; then

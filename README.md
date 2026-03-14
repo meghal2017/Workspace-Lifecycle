@@ -43,40 +43,41 @@ source setup_demo.sh
 
 ### 1. Load an Epic
 
-Start the workflow and fetch the Jira Epic. This generates `specs/Spec.md` v1, containing the Epic details and an AI Implementation Plan. The workflow then pauses, awaiting the signal to start work.
+Start the workflow and fetch the Jira Epic. This generates `specs/Spec.md` v1, containing the Epic details. The workflow then waits for the initial plan approval.
 
 ```bash
-load-epic EPIC-001
+load-epic WL-123
 ```
 
-### 2. Start Work
+### 2. Approve Plan
 
-Trigger the automated analysis agents (e.g., Security Analysis, Architecture Review). Once complete, their findings are appended to the Spec (v2), and a progress comment is posted to Jira. The workflow pauses again for a human review.
+Review the generated spec in `specs/Spec.md` and approve the high-level plan. This unblocks the parallel agent loops for each child task.
 
 ```bash
-start-work EPIC-001
+approve-plan WL-123
 ```
 
-### 3. Approve Work
+### 3. Approve Subtasks
 
-Review the agent findings in `specs/Spec.md`, then approve them to continue the workflow.
+As each agent completes its specific subtask (e.g., UI, Backend, Testing), you can review the results posted to Jira and approve them individually.
 
 ```bash
-approve-work EPIC-001 -comment "Agent results look solid."
+approve-subtask WL-123 WL-124
 ```
 
 ### 4. Close Epic (Final Approval)
 
-Provide the final human approval. The workflow fetches a summary of the development work (PRs merged, etc.) and appends it to the Spec (v3), alongside the final approval stamp. The Jira issue is officially closed.
+Once all subtasks are complete and approved, provide the final human approval to finalize the workspace and close the Epic in Jira.
 
 ```bash
-close-epic EPIC-001 -comment "Ship it to production!"
+close-epic WL-123 -comment "Ship it to production!"
 ```
 
 ## Demo Mode
 
-To see the entire lifecycle play out end-to-end with interactive pauses, run the included demo script:
+To see the entire lifecycle play out end-to-end with the new parallel multi-agent loop, use the `setup-demo` command to create a realistic scenario:
 
 ```bash
-./run_demo.sh
+setup-demo --scenario profile
 ```
+*Scenarios available: profile, auth, search.*

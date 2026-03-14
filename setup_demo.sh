@@ -21,22 +21,28 @@ function load-epic() {
     "$DIR/bin/cli.sh" load-epic "$@"
 }
 
-function start-work() {
-    "$DIR/bin/cli.sh" start-work "$@"
+function approve-plan() {
+    "$DIR/bin/cli.sh" approve-plan "$@"
 }
 
-function approve-work() {
-    "$DIR/bin/cli.sh" approve-work "$@"
+function approve-subtask() {
+    "$DIR/bin/cli.sh" approve-subtask "$@"
 }
 
 function close-epic() {
     "$DIR/bin/cli.sh" close-epic "$@"
 }
 
+function query-wf() {
+    "$DIR/bin/cli.sh" query "$@"
+}
+
 echo "✅ Working shortcuts loaded into your current shell session!"
 echo ""
-echo "Try running:"
-echo "  setup-demo"
-echo "  teardown-demo WL-1"
-echo "  cleanup-workspace"
-echo "  load-epic WL-10"
+echo "Multi-Agent Loop POC Flow:"
+echo "  setup-demo [--scenario <name>]           - Create a real dummy Epic and 3 Story child-tasks in Jira"
+echo "                                             Scenarios: profile, auth, search"
+echo "  load-epic <Epic Name>                    - Start workflow and generate Initial Spec"
+echo "  approve-plan <Key>       (Unblocks agent tasks)"
+echo "  approve-subtask <Key> <Child Key> (Individually approves subtasks)"
+echo "  close-epic <Key>         (Final cleanup)"

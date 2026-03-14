@@ -27,13 +27,14 @@ with workflow.unsafe.imports_passed_through():
     from activities import (
         ingest_jira_epic,
         generate_spec_v1,
-        run_security_analysis,
-        run_architecture_review,
+        execute_agent_resolution,
         update_spec_v2,
-        update_spec_v3,
         update_jira_comment,
         close_jira_issue,
         finalize_workspace,
+        post_implementation_plan,
+        post_spec_artifact,
+        generate_subtask_plan,
     )
 
 # ---------------------------------------------------------------------------
@@ -50,88 +51,54 @@ _DEFAULT_RETRY = RetryPolicy(
 @workflow.defn
 class WorkspaceLCWorkflow:
     """
-    Workspace Lifecycle Workflow
+    Workspace Lifecycle Workflow (Multi-Agent Loop POC)
 
-    Orchestrates the full lifecycle of a workspace from Jira Epic ingestion to
-    human-approved finalization.  All 5 phases survive a worker crash/restart.
-
-    Phases
-    ------
-    1. Ingest   — Load the Jira Epic + assets.
-    2. Spec v1  — Generate the initial Spec.md (t0).
-    3. Agents   — Run two simulated agent tasks in parallel (t0 + m).
-    4. Spec v2  — Update Spec.md with agent outputs.
-    5. Checkpoint — Pause until a human sends the `human_approve` signal.
-    6. Finalize — Stamp the Spec.md and return.
+    Orchestrates:
+    1. Plan Approval — Initial spec approval.
+    2. Parallel Subtasks — Each child task runs its own agent -> approval loop.
+    3. Finalization — Final approval to close the Epic.
     """
 
     def __init__(self) -> None:
-        # Workflow state — replayed automatically on restart
-        self._approved: bool = False
-        self._approver_comment: str = ""
-        self._agent_approved: bool = False
-        self._agent_reviewer_comment: str = ""
-        self._analysis_triggered: bool = False
-        self._epic: Optional[Dict[str, Any]] = None
-        self._agent_results: List[str] = []
         self._phase: str = "INIT"
+        self._epic: Optional[Dict[str, Any]] = None
+        
+        # Signals
+        self._plan_approved: bool = False
+        self._subtask_approvals: Dict[str, bool] = {}
+        self._final_approved: bool = False
+        self._final_comment: str = ""
 
     # ------------------------------------------------------------------
     # Signals
     # ------------------------------------------------------------------
 
     @workflow.signal
-    async def start_analysis(self) -> None:
-        """
-        External signal sent via CLI to trigger the parallel agent tasks.
-        Unblocks the AWAITING_ANALYSIS_TRIGGER checkpoint.
-        """
-        workflow.logger.info("[signal] start_analysis received.")
-        self._analysis_triggered = True
+    async def approve_plan(self) -> None:
+        """Signal to approve the initial implementation plan/spec."""
+        workflow.logger.info("[signal] approve_plan received.")
+        self._plan_approved = True
+
+    @workflow.signal
+    async def approve_subtask(self, subtask_id: str) -> None:
+        """Signal to approve a specific agent's work on a subtask."""
+        workflow.logger.info(f"[signal] approve_subtask received for {subtask_id}")
+        self._subtask_approvals[subtask_id] = True
 
     @workflow.signal
     async def human_approve(self, comment: str = "Approved") -> None:
-        """
-        External signal sent by a human reviewer (or the starter --signal CLI).
-        Unblocks the wait_condition in the main run() loop.
-        """
-        workflow.logger.info(
-            f"[signal] human_approve received. Comment: '{comment}'"
-        )
-        self._approver_comment = comment
-        self._approved = True
-
-    @workflow.signal
-    async def approve_agent_results(self, comment: str = "Looks good") -> None:
-        """
-        Signal sent after reviewing Task 1 + Task 2 outputs.
-        Unblocks the AWAITING_AGENT_REVIEW checkpoint and passes reviewer notes
-        into Spec v2 and the Jira comment.
-        """
-        workflow.logger.info(
-            f"[signal] approve_agent_results received. Comment: '{comment}'"
-        )
-        self._agent_reviewer_comment = comment
-        self._agent_approved = True
+        """Final signal to ship the fix and close the Epic."""
+        workflow.logger.info(f"[signal] human_approve received. Comment: '{comment}'")
+        self._final_comment = comment
+        self._final_approved = True
 
     # ------------------------------------------------------------------
-    # Queries (inspect workflow state without mutating it)
+    # Queries
     # ------------------------------------------------------------------
 
     @workflow.query
     def current_phase(self) -> str:
-        """Return the current phase name for observability."""
         return self._phase
-
-    @workflow.query
-    def is_approved(self) -> bool:
-        """Return whether the final human checkpoint has been passed."""
-        return self._approved
-
-    @workflow.query
-    def agent_results(self) -> List[str]:
-        """Return raw agent task outputs so a reviewer can read them before approving."""
-        return self._agent_results
 
     # ------------------------------------------------------------------
     # Main execution
@@ -139,170 +106,143 @@ class WorkspaceLCWorkflow:
 
     @workflow.run
     async def run(self, epic_id: str) -> str:
-        """
-        Main workflow coroutine.  Temporal replays this from the event log on
-        every worker restart — deterministic code only here.
-        """
         wf_id = workflow.info().workflow_id
-        workflow.logger.info(f"[WorkspaceLCWorkflow] Starting. workflow_id={wf_id}, epic_id={epic_id}")
+        workflow.logger.info(f"[WorkspaceLCWorkflow] Starting POC. epic_id={epic_id}")
 
-        # ----------------------------------------------------------------
-        # Phase 1: Ingest Jira Epic
-        # ----------------------------------------------------------------
+        # Phase 1: Ingest
         self._phase = "INGEST"
-        workflow.logger.info("[Phase 1] Ingesting Jira Epic …")
         self._epic = await workflow.execute_activity(
             ingest_jira_epic,
             epic_id,
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
-        workflow.logger.info(f"[Phase 1] Ingested epic: {self._epic.get('summary', '')}")
 
-        # ----------------------------------------------------------------
-        # Phase 2: Generate Spec.md v1
-        # ----------------------------------------------------------------
-        self._phase = "SPEC_V1"
-        workflow.logger.info("[Phase 2] Generating Spec.md v1 …")
-        spec_path_v1 = await workflow.execute_activity(
+        # Phase 2: Spec v1 & Plan Approval
+        self._phase = "PLAN_APPROVAL"
+        spec_path = await workflow.execute_activity(
             generate_spec_v1,
             self._epic,
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
-        workflow.logger.info(f"[Phase 2] Spec.md v1 written → {spec_path_v1}")
 
-        # ----------------------------------------------------------------
-        # Phase 2b: AWAITING_ANALYSIS_TRIGGER
-        # ----------------------------------------------------------------
-        self._phase = "AWAITING_ANALYSIS_TRIGGER"
-        workflow.logger.info(
-            "[Phase 2b] ⏸ Pausing for analysis trigger. "
-            "Send 'start_analysis' signal to continue."
+        # NEW: Feedback Loop - post plan and full spec artifact to Jira
+        await asyncio.gather(
+            workflow.execute_activity(
+                post_implementation_plan,
+                args=[epic_id, spec_path],
+                schedule_to_close_timeout=timedelta(minutes=1),
+                retry_policy=_DEFAULT_RETRY,
+            ),
+            workflow.execute_activity(
+                post_spec_artifact,
+                args=[epic_id, spec_path],
+                schedule_to_close_timeout=timedelta(minutes=1),
+                retry_policy=_DEFAULT_RETRY,
+            ),
         )
-        await workflow.wait_condition(lambda: self._analysis_triggered)
-        workflow.logger.info("[Phase 2b] ✅ Analysis triggered.")
+        workflow.logger.info("[Phase 2] Waiting for 'approve_plan' signal...")
+        await workflow.wait_condition(lambda: self._plan_approved)
 
-        # ----------------------------------------------------------------
-        # Phase 3: Run agent tasks in parallel (t0 + m)
-        # ----------------------------------------------------------------
-        self._phase = "AGENT_TASKS"
-        workflow.logger.info("[Phase 3] Running agent tasks in parallel …")
-        self._agent_results = list(
-            await asyncio.gather(
-                workflow.execute_activity(
-                    run_security_analysis,
-                    self._epic,
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=_DEFAULT_RETRY,
-                ),
-                workflow.execute_activity(
-                    run_architecture_review,
-                    self._epic,
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=_DEFAULT_RETRY,
-                ),
+        # Phase 3: Parallel Agent Tasks
+        self._phase = "PARALLEL_AGENTS"
+        child_stories = self._epic.get("child_stories", [])
+        workflow.logger.info(f"[Phase 3] Launching {len(child_stories)} parallel agent loops.")
+
+        # Logic for each parallel agent task
+        async def run_agent_loop(story: Dict[str, Any]) -> str:
+            sid = story["key"]
+            sumry = story["summary"]
+            epic_desc = self._epic.get("description", "")
+            
+            # 1. NEW: Generate local plan dynamically
+            plan_steps = await workflow.execute_activity(
+                generate_subtask_plan,
+                args=[sid, sumry, epic_desc],
+                schedule_to_close_timeout=timedelta(minutes=2),
+                retry_policy=_DEFAULT_RETRY,
             )
-        )
-        workflow.logger.info(f"[Phase 3] {len(self._agent_results)} agent tasks completed.")
 
-        # ----------------------------------------------------------------
-        # Phase 3b: Human Checkpoint — review agent results
-        # ----------------------------------------------------------------
-        self._phase = "AWAITING_AGENT_REVIEW"
-        workflow.logger.info(
-            "[Phase 3b] ⏸ Pausing for agent results review. "
-            "Send 'approve_agent_results' signal to continue."
-        )
-        await workflow.wait_condition(lambda: self._agent_approved)
-        workflow.logger.info(
-            f"[Phase 3b] ✅ Agent results approved. Notes: '{self._agent_reviewer_comment}'"
-        )
+            # 2. Post local plan to subtask
+            plan_comment = "📅 **Implementation Approach**\n" + "\n".join([f"- {s}" for s in plan_steps])
+            await workflow.execute_activity(
+                update_jira_comment,
+                args=[sid, plan_comment],
+                schedule_to_close_timeout=timedelta(minutes=1),
+                retry_policy=_DEFAULT_RETRY,
+            )
 
-        # ----------------------------------------------------------------
-        # Phase 4: Update Spec.md to v2 (includes reviewer notes)
-        # ----------------------------------------------------------------
-        self._phase = "SPEC_V2"
-        workflow.logger.info("[Phase 4] Updating Spec.md to v2 …")
-        spec_path_v2 = await workflow.execute_activity(
-            update_spec_v2,
-            args=[self._agent_results, self._agent_reviewer_comment],
-            schedule_to_close_timeout=timedelta(minutes=2),
-            retry_policy=_DEFAULT_RETRY,
-        )
-        workflow.logger.info(f"[Phase 4] Spec.md v2 written → {spec_path_v2}")
+            # 3. Execute Resolution
+            res = await workflow.execute_activity(
+                execute_agent_resolution,
+                args=[sid, sumry, plan_steps],
+                schedule_to_close_timeout=timedelta(minutes=5),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            
+            # 2. Notify Jira that agent is done and waiting for approval
+            await workflow.execute_activity(
+                update_jira_comment,
+                args=[sid, f"Agent has completed the resolution for `{sid}`. Please review the findings and approve."],
+                schedule_to_close_timeout=timedelta(minutes=1),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            
+            # 3. Wait for individual approval
+            workflow.logger.info(f"Agent loop {sid} waiting for 'approve_subtask'...")
+            await workflow.wait_condition(lambda: self._subtask_approvals.get(sid, False))
 
-        # ----------------------------------------------------------------
-        # Phase 4b: Update Jira with a progress summary comment
-        # ----------------------------------------------------------------
-        self._phase = "JIRA_UPDATE"
-        workflow.logger.info("[Phase 4b] Posting Jira progress comment …")
-        jira_summary = (
-            f"Agent analysis complete for epic `{epic_id}`.\n\n"
-            f"**Security Analysis:** Task 1 findings appended to Spec.md.\n"
-            f"**Architecture Review:** Task 2 findings appended to Spec.md.\n"
-            f"**Reviewer notes:** {self._agent_reviewer_comment}\n\n"
-            f"Spec.md updated to v2 at `{spec_path_v2}`. Awaiting final human approval."
-        )
+            # NEW: Post approval stamp to the subtask
+            await workflow.execute_activity(
+                update_jira_comment,
+                args=[sid, "✅ **Human Approval Stamp**: Resolution reviewed and approved by workspace manager."],
+                schedule_to_close_timeout=timedelta(minutes=1),
+                retry_policy=_DEFAULT_RETRY,
+            )
+
+            # 4. Final Transition to "Done"
+            await workflow.execute_activity(
+                close_jira_issue,
+                args=[sid, "Agent resolution approved by human."],
+                schedule_to_close_timeout=timedelta(minutes=2),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            
+            return res
+
+        # Gather all parallel tasks
+        agent_results = await asyncio.gather(*(run_agent_loop(s) for s in child_stories))
+
+        # Phase 4: Summarize in Spec v2
+        self._phase = "SUMMARY"
         await workflow.execute_activity(
-            update_jira_comment,
-            args=[epic_id, jira_summary],
+            update_spec_v2,
+            args=[agent_results],
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
-        workflow.logger.info("[Phase 4b] Jira comment posted.")
 
-        # ----------------------------------------------------------------
-        # Phase 5: Human Checkpoint — final approval before finalize
-        # ----------------------------------------------------------------
-        self._phase = "AWAITING_HUMAN"
-        workflow.logger.info(
-            "[Phase 5] ⏸ Pausing at final human checkpoint. "
-            "Send the 'human_approve' signal to continue."
-        )
-        await workflow.wait_condition(lambda: self._approved)
-        workflow.logger.info(
-            f"[Phase 5] ✅ Checkpoint cleared. Comment: '{self._approver_comment}'"
-        )
+        # Phase 5: Final Epic Approval
+        self._phase = "FINAL_APPROVAL"
+        workflow.logger.info("[Phase 5] Waiting for final 'human_approve' to close Epic...")
+        await workflow.wait_condition(lambda: self._final_approved)
 
-        # ----------------------------------------------------------------
-        # Phase 5b: Post final approval to Jira and close the issue
-        # ----------------------------------------------------------------
-        self._phase = "JIRA_CLOSE"
-        workflow.logger.info("[Phase 5b] Closing Jira issue …")
+        # Phase 6: Close Epic
+        self._phase = "CLOSE_EPIC"
         await workflow.execute_activity(
             close_jira_issue,
-            args=[epic_id, self._approver_comment],
+            args=[epic_id, self._final_comment],
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
-        workflow.logger.info("[Phase 5b] Jira issue closed.")
-
-        # ----------------------------------------------------------------
-        # Phase 6: Fetch Jira Development Summary (Spec v3)
-        # ----------------------------------------------------------------
-        self._phase = "SPEC_V3"
-        workflow.logger.info("[Phase 6] Fetching Jira Development Summary for Spec v3 …")
+        
         await workflow.execute_activity(
-            update_spec_v3,
-            args=[epic_id],
-            schedule_to_close_timeout=timedelta(minutes=2),
-            retry_policy=_DEFAULT_RETRY,
-        )
-        workflow.logger.info("[Phase 6] Spec.md v3 updated.")
-
-        # ----------------------------------------------------------------
-        # Phase 7: Finalize
-        # ----------------------------------------------------------------
-        self._phase = "FINALIZE"
-        workflow.logger.info("[Phase 7] Finalizing workspace …")
-        summary = await workflow.execute_activity(
             finalize_workspace,
-            args=[epic_id, self._approver_comment],
+            args=[epic_id, self._final_comment],
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
-        workflow.logger.info(f"[Phase 7] {summary}")
 
         self._phase = "DONE"
-        return summary
+        return f"Workflow complete for {epic_id}"

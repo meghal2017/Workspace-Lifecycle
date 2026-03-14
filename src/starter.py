@@ -96,46 +96,32 @@ async def send_signal(client: Client, workflow_id: str, comment: str) -> None:
     logger.info(f"Sending 'human_approve' signal to: {workflow_id}")
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(WorkspaceLCWorkflow.human_approve, comment)
-    logger.info(f"✅ Signal sent. Comment: '{comment}'")
+    logger.info(f"✅ Final approval sent. Comment: '{comment}'")
 
 
-async def trigger_analysis(client: Client, workflow_id: str) -> None:
-    logger.info(f"Sending 'start_analysis' signal to: {workflow_id}")
+async def approve_plan(client: Client, workflow_id: str) -> None:
+    logger.info(f"Sending 'approve_plan' signal to: {workflow_id}")
     handle = client.get_workflow_handle(workflow_id)
-    await handle.signal(WorkspaceLCWorkflow.start_analysis)
-    logger.info("✅ Analysis triggered.")
+    await handle.signal(WorkspaceLCWorkflow.approve_plan)
+    logger.info("✅ Plan approved.")
+
+
+async def approve_subtask(client: Client, workflow_id: str, subtask_id: str) -> None:
+    logger.info(f"Sending 'approve_subtask' signal for {subtask_id} to: {workflow_id}")
+    handle = client.get_workflow_handle(workflow_id)
+    await handle.signal(WorkspaceLCWorkflow.approve_subtask, subtask_id)
+    logger.info(f"✅ Subtask {subtask_id} approved.")
 
 
 async def query_phase(client: Client, workflow_id: str) -> None:
     handle = client.get_workflow_handle(workflow_id)
     phase    = await handle.query(WorkspaceLCWorkflow.current_phase)
-    approved = await handle.query(WorkspaceLCWorkflow.is_approved)
     logger.info(
         f"\n{'='*40}\n"
         f"  Workflow : {workflow_id}\n"
         f"  Phase    : {phase}\n"
-        f"  Approved : {approved}\n"
         f"{'='*40}\n"
     )
-
-
-async def approve_agents(client: Client, workflow_id: str, comment: str) -> None:
-    logger.info(f"Sending 'approve_agent_results' signal to: {workflow_id}")
-    handle = client.get_workflow_handle(workflow_id)
-    await handle.signal(WorkspaceLCWorkflow.approve_agent_results, comment)
-    logger.info(f"✅ Agent results approved. Comment: '{comment}'")
-
-
-async def print_agent_results(client: Client, workflow_id: str) -> None:
-    handle = client.get_workflow_handle(workflow_id)
-    results = await handle.query(WorkspaceLCWorkflow.agent_results)
-    if not results:
-        logger.info("Agent results not available yet (workflow still in AGENT_TASKS phase).")
-        return
-    logger.info(f"\n{'='*60}")
-    for i, r in enumerate(results, start=1):
-        logger.info(f"\n--- Agent Task {i} ---\n{r}")
-    logger.info(f"{'='*60}\n")
 
 
 async def print_jira_transitions(issue_key: str) -> None:
@@ -155,13 +141,12 @@ async def print_jira_transitions(issue_key: str) -> None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Workspace Lifecycle Workflow CLI")
     parser.add_argument("--load-epic",         default="EPIC-001", dest="load_epic", help="Jira Epic ID (default: EPIC-001)")
+    parser.add_argument("--approve-plan",      metavar="WORKFLOW_ID", dest="approve_plan_wf", help="Send approve_plan signal")
+    parser.add_argument("--approve-subtask",   nargs=2, metavar=("WORKFLOW_ID", "SUBTASK_ID"), dest="approve_subtask_wf", help="Send approve_subtask signal")
     parser.add_argument("--close-epic",        metavar="WORKFLOW_ID", dest="close_epic", help="Send human_approve signal (final checkpoint)")
-    parser.add_argument("--approve-work",      metavar="WORKFLOW_ID", dest="approve_work", help="Send approve_agent_results signal")
-    parser.add_argument("--start-work",        metavar="WORKFLOW_ID", dest="start_work", help="Send start_analysis signal to trigger agent scans")
-    parser.add_argument("--agent-results",     metavar="WORKFLOW_ID", dest="agent_results_wf", help="Query and print raw agent task outputs")
-    parser.add_argument("--comment",           default="Approved — looks good!", help="Approval comment")
+    parser.add_argument("--comment",           default="Approved!", help="Approval comment")
     parser.add_argument("--query",             metavar="WORKFLOW_ID", help="Query current workflow phase")
-    parser.add_argument("--jira-transitions",  metavar="ISSUE_KEY", dest="jira_transitions", help="List Jira transitions for an issue (e.g. WL-1)")
+    parser.add_argument("--jira-transitions",  metavar="ISSUE_KEY", dest="jira_transitions", help="List Jira transitions for an issue")
     args = parser.parse_args()
 
     if args.jira_transitions:
@@ -170,14 +155,12 @@ async def main() -> None:
 
     client = await _get_client()
 
-    if args.close_epic:
+    if args.approve_plan_wf:
+        await approve_plan(client, args.approve_plan_wf)
+    elif args.approve_subtask_wf:
+        await approve_subtask(client, args.approve_subtask_wf[0], args.approve_subtask_wf[1])
+    elif args.close_epic:
         await send_signal(client, args.close_epic, args.comment)
-    elif args.approve_work:
-        await approve_agents(client, args.approve_work, args.comment)
-    elif args.start_work:
-        await trigger_analysis(client, args.start_work)
-    elif args.agent_results_wf:
-        await print_agent_results(client, args.agent_results_wf)
     elif args.query:
         await query_phase(client, args.query)
     else:

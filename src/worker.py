@@ -41,13 +41,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 from activities import (
     ingest_jira_epic,
     generate_spec_v1,
-    run_architecture_review,
-    run_security_analysis,
+    execute_agent_resolution,
     update_spec_v2,
-    update_spec_v3,
     update_jira_comment,
     close_jira_issue,
     finalize_workspace,
+    post_implementation_plan,
+    post_spec_artifact,
+    generate_subtask_plan,
 )
 from workflow import WorkspaceLCWorkflow
 
@@ -100,13 +101,14 @@ async def main() -> None:
         activities=[
             ingest_jira_epic,
             generate_spec_v1,
-            run_security_analysis,
-            run_architecture_review,
+            execute_agent_resolution,
             update_spec_v2,
-            update_spec_v3,
             update_jira_comment,
             close_jira_issue,
             finalize_workspace,
+            post_implementation_plan,
+            post_spec_artifact,
+            generate_subtask_plan,
         ],
     ):
         logger.info(

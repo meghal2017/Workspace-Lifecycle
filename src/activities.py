@@ -48,16 +48,18 @@ async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
     
     # 2. Fetch child issues
     child_issues = await jira_client.get_child_issues(epic_id)
-    child_stories = [f"{child['key']} - {child.get('fields', {}).get('summary', '')}" for child in child_issues]
+    child_stories = []
+    for child in child_issues:
+        c_fields = child.get('fields', {})
+        c_desc = jira_client.adf_to_text(c_fields.get('description'))
+        
+        child_stories.append({
+            "key": child['key'], 
+            "summary": c_fields.get('summary', ''),
+            "description": c_desc
+        })
     
-    # 2b. Transition epic and children to "In Progress"
-    if jira_client.jira_enabled():
-        logger.info(f"[ingest_jira_epic] Transitioning {epic_id} and children to In Progress...")
-        await jira_client.transition_to_in_progress(epic_id)
-        for child in child_issues:
-            await jira_client.transition_to_in_progress(child["key"])
-    else:
-        logger.info(f"[ingest_jira_epic] [MOCK] Transitioning {epic_id} and {len(child_issues)} children to In Progress")
+    # Note: Transitioning to "In Progress" now happens dynamically later in the parallel workflow for each subtask
     
     # 3. Parse ADF description
     description_text = jira_client.adf_to_text(fields.get("description"))
@@ -155,18 +157,21 @@ async def generate_spec_v1(epic: Dict[str, Any]) -> str:
 
 ## 5. Child Stories
 
-{', '.join(epic.get('child_stories', []))}
+{', '.join(epic.get('child_stories_fmt', [s['key'] + ' - ' + s['summary'] for s in epic.get('child_stories', [])]))}
 
 ---
 
 ## 6. Implementation Plan
 
-1. **Analysis:** Epic `{epic['key']}` requires backend and infrastructural changes based on its acceptance criteria.
-2. **Implementation Strategy:**
-   - *Phase A:* Code scaffolding and database migrations.
-   - *Phase B:* Core business logic and API endpoints.
-   - *Phase C:* Comprehensive integration testing.
 """
+    # Build hierarchical plan mapping to child tasks
+    for s in epic.get('child_stories', []):
+        key = s['key']
+        summ = s['summary']
+        content += f"### Tasks for {key}: {summ}\n"
+        content += f"- [ ] Analyze requirements for {summ}\n"
+        content += f"- [ ] Implement core logic and file changes\n"
+        content += f"- [ ] Run local verification suite\n\n"
 
     path = _spec_path()
     with open(path, "w") as f:
@@ -177,52 +182,80 @@ async def generate_spec_v1(epic: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Activity: Agent Task 1 — Security Analysis
+# Activity: Generate Subtask Plan
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def run_security_analysis(epic: Dict[str, Any]) -> str:
+async def generate_subtask_plan(subtask_id: str, summary: str, epic_context: str) -> List[str]:
     """
-    Step 3a — Simulated agent: security & dependency analysis.
-    Sleeps to mimic real inference time.
+    Simulated reasoning: Agent analyzes the subtask and epic context to generate a local plan.
     """
-    logger = activity.logger
-    logger.info("[run_agent_task_1] Running security analysis agent …")
-    await asyncio.sleep(2)  # simulate LLM / tool latency
-
-    result = (
-        f"**Security Analysis** (run at {datetime.utcnow().isoformat(timespec='seconds')}Z)\n\n"
-        f"- Repo `{epic.get('key')}` scanned: 0 critical CVEs found.\n"
-        f"- Dependency audit: all packages pinned, no known vulnerabilities.\n"
-        f"- SAST scan complete: 2 low-severity findings flagged for review.\n"
-        f"- Recommended action: enable Dependabot auto-merge for patch versions.\n"
-    )
-    logger.info("[run_agent_task_1] Security analysis complete.")
-    return result
-
+    activity.logger.info(f"[generate_subtask_plan] Agent planning for {subtask_id} …")
+    await asyncio.sleep(1) # simulate reasoning
+    
+    # Simple heuristic-based plan generation for the POC
+    s = summary.lower()
+    if "ui" in s or "component" in s:
+        return [
+            f"Analyze design specs for {summary}",
+            "Implement responsive UI components",
+            "Verify accessibility and styling"
+        ]
+    elif "backend" in s or "api" in s or "endpoint" in s:
+        return [
+            f"Define data models for {summary}",
+            "Implement business logic and service layer",
+            "Expose REST/GraphQL endpoints"
+        ]
+    elif "test" in s or "cypress" in s or "unit" in s:
+        return [
+            f"Identify test cases for {summary}",
+            "Implement automated test scripts",
+            "Verify coverage and edge cases"
+        ]
+    elif "infra" in s or "deploy" in s or "vector" in s:
+        return [
+            f"Review resource requirements for {summary}",
+            "Provision cloud infrastructure",
+            "Validate service connectivity"
+        ]
+    else:
+        return [
+            f"Research requirements for {summary}",
+            "Implement the requested logic",
+            "Perform local verification"
+        ]
 
 # ---------------------------------------------------------------------------
-# Activity: Agent Task 2 — Architecture Review
+# Activity: Execute Agent Resolution
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def run_architecture_review(epic: Dict[str, Any]) -> str:
+async def execute_agent_resolution(subtask_id: str, summary: str, plan_steps: List[str] = None) -> str:
     """
-    Step 3b — Simulated agent: architecture & scalability review.
-    Sleeps to mimic real inference time.
+    Simulated agent processing a specific subtask.
     """
     logger = activity.logger
-    logger.info("[run_agent_task_2] Running architecture review agent …")
-    await asyncio.sleep(2)  # simulate LLM / tool latency
+    logger.info(f"[execute_agent_resolution] Agent working on {subtask_id}: {summary} …")
+    
+    if jira_client.jira_enabled():
+        await jira_client.transition_to_in_progress(subtask_id)
+        
+    await asyncio.sleep(2)  # simulate LLM latency
+
+    plan_md = ""
+    if plan_steps:
+        plan_md = "### Implementation Approach\n" + "\n".join([f"- {step}" for step in plan_steps]) + "\n\n"
 
     result = (
-        f"**Architecture Review** (run at {datetime.utcnow().isoformat(timespec='seconds')}Z)\n\n"
-        f"- Service boundary analysis: microservice decomposition is well-structured.\n"
-        f"- Data flow: stateless review pipeline identified; recommend adding a message queue for scale.\n"
-        f"- PR throughput estimate: system can handle ~{epic.get('story_points', 30) * 50} reviews/day.\n"
-        f"- Observability gap: no distributed tracing found; recommend adding OpenTelemetry.\n"
+        f"**Resolution for {subtask_id}**\n\n"
+        f"{plan_md}"
+        f"### Results summary\n"
+        f"Agent processed request: `{summary}`\n"
+        f"- Implemented necessary file changes.\n"
+        f"- Ran unit test suite locally: All tests passed.\n"
     )
-    logger.info("[run_agent_task_2] Architecture review complete.")
+    logger.info(f"[execute_agent_resolution] Agent `{subtask_id}` complete.")
     return result
 
 
@@ -231,9 +264,9 @@ async def run_architecture_review(epic: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def update_spec_v2(agent_results: List[str], reviewer_comment: str = "") -> str:
+async def update_spec_v2(agent_results: List[str]) -> str:
     """
-    Step 4 — Append agent task outputs + reviewer notes to produce Spec.md v2 (t0 + m).
+    Step 4 — Append combined agent task results to produce Spec.md v2.
     """
     logger = activity.logger
     logger.info("[update_spec_v2] Updating Spec.md to v2 …")
@@ -249,23 +282,17 @@ async def update_spec_v2(agent_results: List[str], reviewer_comment: str = "") -
     agent_section = f"""
 ---
 
-## 6. Agent Task Results (v2 — {now})
+## 7. Parallel Subtask Resolutions (v2 — {now})
 
 """
-    for i, result in enumerate(agent_results, start=1):
-        import re as _re
-        match = _re.match(r'\*\*([^*]+)\*\*', result.strip())
-        task_name = match.group(1) if match else f"Agent Task {i}"
-        agent_section += f"### {task_name}\n\n{result}\n\n"
-
-    if reviewer_comment:
-        agent_section += (
-            f"### 👤 Reviewer Notes\n\n"
-            f"> {reviewer_comment}\n\n"
-        )
+    for res in agent_results:
+        agent_section += f"{res}\n\n---\n\n"
 
     with open(path, "w") as f:
         f.write(updated + agent_section)
+
+    logger.info(f"[update_spec_v2] Spec.md v2 written to {path}")
+    return path
 
     logger.info(f"[update_spec_v2] Spec.md v2 written to {path}")
     return path
@@ -276,37 +303,29 @@ async def update_spec_v2(agent_results: List[str], reviewer_comment: str = "") -
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def update_jira_comment(epic_id: str, summary_comment: str) -> str:
+async def update_jira_comment(issue_id: str, summary_comment: str) -> str:
     """
-    Step 4b — Post a progress comment to the Jira issue.
+    Step 4b — Post a progress comment to a specific Jira issue.
     Uses the real Jira REST API when JIRA_API_TOKEN is set; falls back to mock.
     """
     logger = activity.logger
-    logger.info(f"[update_jira_comment] Posting progress comment to Jira issue {epic_id} …")
+    logger.info(f"[update_jira_comment] Posting progress comment to Jira issue {issue_id} …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     spec_ref = _spec_path()
 
     comment_text = (
-        f"🤖 Automated Progress Update — {now}\n\n"
         f"{summary_comment}\n\n"
         f"📄 Full details in the generated spec: {spec_ref}"
     )
 
     if jira_client.jira_enabled():
-        # Comment on the Epic
-        await jira_client.add_comment(epic_id, comment_text)
-        logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to Epic {epic_id}")
-        
-        # Comment on all connected child stories
-        child_issues = await jira_client.get_child_issues(epic_id)
-        for child in child_issues:
-            child_key = child["key"]
-            await jira_client.add_comment(child_key, comment_text)
-            logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to Child {child_key}")
+        # Comment on the specified issue
+        await jira_client.add_comment(issue_id, comment_text)
+        logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to {issue_id}")
     else:
-        logger.info(f"[update_jira_comment] [MOCK] Jira comment for {epic_id} and its children:\n{comment_text}")
+        logger.info(f"[update_jira_comment] [MOCK] Jira comment for {issue_id}:\n{comment_text}")
 
-    return f"Jira comment posted to {epic_id} and children at {now}"
+    return f"Jira comment posted to {issue_id} at {now}"
 
 
 # ---------------------------------------------------------------------------
@@ -314,45 +333,30 @@ async def update_jira_comment(epic_id: str, summary_comment: str) -> str:
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def close_jira_issue(epic_id: str, final_comment: str) -> str:
+async def close_jira_issue(issue_id: str, final_comment: str) -> str:
     """
-    Step 5b — Post the final human approval comment and transition the Jira
-    issue to 'Done'.
-    Uses the real Jira REST API when JIRA_API_TOKEN is set; falls back to mock.
+    Post a final human approval comment and transition the specific Jira issue to 'Done'.
     """
     logger = activity.logger
-    logger.info(f"[close_jira_issue] Closing Jira issue {epic_id} …")
+    logger.info(f"[close_jira_issue] Closing Jira issue {issue_id} …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
     comment_text = (
-        f"✅ Human Approval Received — {now}\n\n"
         f"{final_comment}\n\n"
-        f"This issue is now being marked as Done."
+        f"This issue is now marked as Done."
     )
 
     if jira_client.jira_enabled():
-        # Close Epic
-        await jira_client.add_comment(epic_id, comment_text)
-        success = await jira_client.transition_to_done(epic_id)
+        await jira_client.add_comment(issue_id, comment_text)
+        success = await jira_client.transition_to_done(issue_id)
         if success:
-            logger.info(f"[close_jira_issue] ✅ Jira Epic {epic_id} transitioned to Done")
+            logger.info(f"[close_jira_issue] ✅ Jira Issue {issue_id} transitioned to Done")
         else:
-            logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for Epic {epic_id}")
-
-        # Close all connected child stories
-        child_issues = await jira_client.get_child_issues(epic_id)
-        for child in child_issues:
-            child_key = child["key"]
-            await jira_client.add_comment(child_key, comment_text)
-            child_success = await jira_client.transition_to_done(child_key)
-            if child_success:
-                logger.info(f"[close_jira_issue] ✅ Jira Child {child_key} transitioned to Done")
-            else:
-                logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for Child {child_key}")
+            logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for {issue_id}")
     else:
-        logger.info(f"[close_jira_issue] [MOCK] Jira close for {epic_id} and its children:\n{comment_text}")
+        logger.info(f"[close_jira_issue] [MOCK] Jira close for {issue_id}:\n{comment_text}")
 
-    return f"Jira issue {epic_id} and children closed at {now}"
+    return f"Jira issue {issue_id} closed at {now}"
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +388,49 @@ async def finalize_workspace(epic_id: str, approver_comment: str) -> str:
     with open(path, "a") as f:
         f.write(footer)
 
-    logger.info(f"[finalize_workspace] Workspace {epic_id} finalized. Spec.md updated.")
-    return f"Workspace {epic_id} FINALIZED at {now}"
+    logger.info(f"[finalize_workspace] Workspace for {epic_id} sealed and finalized.")
+    return f"Workspace for {epic_id} successfully finalized."
+
+# ---------------------------------------------------------------------------
+# Activity: Post Implementation Plan to Jira
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def post_implementation_plan(epic_id: str, spec_path: str) -> None:
+    """Read the To-Do list from Spec.md and post it as a comment on the Epic."""
+    if not jira_client.jira_enabled(): return
+
+    try:
+        with open(spec_path, "r") as f:
+            content = f.read()
+        
+        # Extract Section 6 (To-Do List)
+        if "## 6. Implementation Plan" in content:
+            todo_section = content.split("## 6. Implementation Plan")[1].strip()
+            comment = f"📝 **Implementation Plan (To-Do List)**\n\n{todo_section}"
+            await jira_client.add_comment(epic_id, comment)
+            activity.logger.info(f"[post_implementation_plan] Plan posted to {epic_id}")
+    except Exception as e:
+        activity.logger.warning(f"[post_implementation_plan] Failed to post plan: {e}")
+
+# ---------------------------------------------------------------------------
+# Activity: Post Full Spec Artifact to Jira
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def post_spec_artifact(epic_id: str, spec_path: str) -> None:
+    """Post the entire Spec.md file content as a markdown comment artifact."""
+    if not jira_client.jira_enabled(): return
+
+    try:
+        with open(spec_path, "r") as f:
+            content = f.read()
+        
+        artifact_block = f"📂 **Spec.md Full Artifact Repository**\n\n{content}"
+        await jira_client.add_comment(epic_id, artifact_block)
+        activity.logger.info(f"[post_spec_artifact] Full spec artifact posted to {epic_id}")
+    except Exception as e:
+        activity.logger.warning(f"[post_spec_artifact] Failed to post artifact: {e}")
 
 
 # ---------------------------------------------------------------------------
