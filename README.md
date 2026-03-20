@@ -68,12 +68,18 @@ Review the generated spec in `specs/Spec.md` and approve the high-level plan. Th
 approve-plan WL-123
 ```
 
-### 3. Approve Subtasks
+### 3. Check Real-time Status
 
-As each agent completes its specific subtask (e.g., UI, Backend, Testing), you can review the results posted to Jira and approve them individually.
-
+Get a dashboard view of all agents and the overall Epic phase:
 ```bash
-approve-subtask WL-123 WL-124
+query-wf WL-1
+```
+
+### 4. Approve Subtasks (Incremental)
+
+As each agent completes its work, follow the "Next step" guide to approve them individually.
+```bash
+approve-subtask WL-1 WL-1-101
 ```
 
 ### 4. Close Epic (Final Approval)

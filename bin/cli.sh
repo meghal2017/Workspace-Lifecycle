@@ -11,7 +11,7 @@ function show_help {
     echo "  setup-demo                               - Create a real dummy Epic and 3 Story child-tasks in Jira"
     echo "  load-epic <Epic Name>                    - Start workflow and generate Initial Spec"
     echo "  query <Epic Name>                        - Query the current phase of the workflow"
-    echo "  status <Epic Name>                       - Query detailed subtask/epic status"
+    echo "  query-wf <Epic Name>                     - Query detailed subtask/epic status"
     echo "  approve-plan <Epic Name>                 - Approve the implementation plan to begin agent tasks"
     echo "  reset-wf <Epic Name>                     - Terminate a stuck workflow"
 
@@ -90,7 +90,7 @@ case $COMMAND in
     query)
         $STARTER --query "$WORKFLOW_ID"
         ;;
-    status)
+    query-wf)
         $STARTER --status "$WORKFLOW_ID"
         ;;
     reset-wf)

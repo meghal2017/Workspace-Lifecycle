@@ -57,30 +57,28 @@ approve-plan EPIC-001
 
 * **What happens:** The workflow resumes and launches the parallel multi-agent loop. Each subtask will now perform its own dynamic planning and execution.
 
-## 3. Approve Subtasks
+## 3. Query Detailed Status (Optional)
 
-As each agent finishes its work, it will post a resolution to Jira (or log it in Offline Mode). You must approve each subtask individually.
-
-```bash
-approve-subtask EPIC-001 <SUBTASK_ID>
-```
-
-## 4. Approve Work
-
-Review the agent findings inside `specs/Spec.md`. If they look good, approve them and optionally leave a reviewer comment.
+At any point, you can fetch the detailed health and status table (with icons for subtasks):
 
 ```bash
-approve-work EPIC-001 -comment "Agent results look solid, ready for final human sign-off."
+query-wf WL-1
 ```
 
-* **What happens:** The workflow records your approval comment, but pauses *one last time* at the final human checkpoint.
+## 4. Approve Subtasks (Incremental)
+
+As each agent finishes its work, the CLI will guide you to approve them one by one.
+
+```bash
+approve-subtask WL-1 WL-1-101
+```
 
 ## 5. Close Epic (Final Approval)
 
 Give the ultimate sign-off to finalize the workspace and close the Jira issue.
 
 ```bash
-close-epic EPIC-001 -comment "Ship it to production!"
+close-epic WL-1 -comment "Ship it to production!"
 ```
 
 * **What happens:** The workflow fetches the simulated Jira Development Summary (PRs merged, deployment status, etc.) and appends it to `Spec.md` as v3. Finally, it stamps the bottom of the Spec with your final closing comment and fully completes the Temporal run!

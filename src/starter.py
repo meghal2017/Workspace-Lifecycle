@@ -92,6 +92,7 @@ async def start_workflow(client: Client, epic_id: str) -> None:
         f"  Task Queue  : {TASK_QUEUE}\n"
         f"{'='*60}\n"
         f"Next step: approve-plan {epic_id}\n"
+        f"(You can always fetch full status using: query-wf {epic_id})\n"
     )
 
 
@@ -102,12 +103,51 @@ async def send_signal(client: Client, workflow_id: str, comment: str) -> None:
     logger.info(f"✅ Final approval sent. Comment: '{comment}'")
 
 
+    print(f"{'='*50}")
+    print(f"Next step: Workflow Finalized! ✅")
+    print(f"(You can verify the final record using: query-wf {workflow_id.replace('workspace-lc-', '')})")
+    print(f"{'='*50}")
+
+
+async def _get_next_step_hint(client: Client, workflow_id: str) -> str:
+    """Query workflow for subtask states and determine the next logical action."""
+    epic_key = workflow_id.replace("workspace-lc-", "").upper()
+    try:
+        handle = client.get_workflow_handle(workflow_id)
+        
+        # 1. Get all known keys for this Epic
+        all_keys = await handle.query("subtask_keys")
+        
+        # 2. Filter out keys that are already DONE in states
+        # (This handles the case where loops haven't started yet too!)
+        states = await handle.query("subtask_status") or {}
+        pending = [k for k in (all_keys or []) if states.get(k) != "DONE"]
+
+        if pending:
+            next_sid = sorted(pending)[0]
+            return f"approve-subtask {epic_key} {next_sid}"
+        
+        # If all subtasks are done, check phase
+        phase = await handle.query("current_phase")
+        if phase in ["FINAL_APPROVAL", "CLOSED", "DONE"] or (states and all(s == "DONE" for s in states.values())):
+            return f"close-epic {epic_key}"
+            
+        return f"query-wf {epic_key}"
+    except Exception:
+        return f"query-wf {epic_key}"
+
+
 async def approve_plan(client: Client, workflow_id: str) -> None:
     logger.info(f"Sending 'approve_plan' signal to: {workflow_id}")
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(WorkspaceLCWorkflow.approve_plan)
     logger.info("✅ Plan approved.")
-    print(f"Next step: status {workflow_id.replace('workspace-lc-', '')}")
+    
+    next_step = await _get_next_step_hint(client, workflow_id)
+    print(f"{'='*50}")
+    print(f"Next step: {next_step}")
+    print(f"(You can always fetch full status using: query-wf {workflow_id.replace('workspace-lc-', '')})")
+    print(f"{'='*50}")
 
 
 async def approve_subtask(client: Client, workflow_id: str, subtask_id: str) -> None:
@@ -115,7 +155,12 @@ async def approve_subtask(client: Client, workflow_id: str, subtask_id: str) -> 
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(WorkspaceLCWorkflow.approve_subtask, subtask_id.upper())
     logger.info(f"✅ Subtask {subtask_id} approved.")
-    print(f"Next step: status {workflow_id.replace('workspace-lc-', '')}")
+    
+    next_step = await _get_next_step_hint(client, workflow_id)
+    print(f"{'='*50}")
+    print(f"Next step: {next_step}")
+    print(f"(You can always fetch full status using: query-wf {workflow_id.replace('workspace-lc-', '')})")
+    print(f"{'='*50}")
 
 
 async def terminate_workflow(client: Client, workflow_id: str) -> None:

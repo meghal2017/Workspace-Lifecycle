@@ -453,6 +453,14 @@ async def transition_to_planning(issue_id: str) -> bool:
 
 
 @activity.defn
+async def transition_to_done(issue_id: str) -> bool:
+    """Transition a Jira issue to 'Done'."""
+    # We can use the existing transition logic in jira_client
+    # If the simulator, it already handles any status name
+    return await jira_client.transition_issue(issue_id, "Done")
+
+
+@activity.defn
 async def transition_to_in_progress(issue_id: str) -> bool:
     """Transition a Jira issue to 'In Progress'."""
     return await jira_client.transition_to_in_progress(issue_id)

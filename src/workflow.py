@@ -41,6 +41,7 @@ with workflow.unsafe.imports_passed_through():
         transition_to_planning,
         transition_to_in_progress,
         transition_to_in_review,
+        transition_to_done,
     )
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,12 @@ class WorkspaceLCWorkflow:
     @workflow.query
     def epic_status(self) -> str:
         return self._epic.get("status", "To Do")
+
+    @workflow.query
+    def subtask_keys(self) -> List[str]:
+        """Return all subtask keys associated with this Epic."""
+        children = self._epic.get("child_stories", [])
+        return [c.get("key") for c in children if c.get("key")]
 
     # ------------------------------------------------------------------
     # Main execution

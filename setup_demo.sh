@@ -33,11 +33,11 @@ function close-epic() {
     "$DIR/bin/cli.sh" close-epic "$@"
 }
 
-function status() {
-    "$DIR/bin/cli.sh" status "$@"
+function query-wf() {
+    "$DIR/bin/cli.sh" query-wf "$@"
 }
 
-function query-wf() {
+function query() {
     "$DIR/bin/cli.sh" query "$@"
 }
 
@@ -47,7 +47,7 @@ echo "Multi-Agent Loop POC Flow:"
 echo "  setup-demo [--scenario <name>]           - Create a real dummy Epic and 3 Story child-tasks in Jira"
 echo "                                             Scenarios: profile, auth, search"
 echo "  load-epic <Epic Name>                    - Start workflow and generate Initial Spec"
-echo "  status <Key>             (Tracks individual agents in real-time)"
+echo "  query-wf <Key>           (Tracks individual agents in real-time)"
 echo "  approve-plan <Key>       (Unblocks agent tasks)"
 echo "  approve-subtask <Key> <Child Key> (Individually approves subtasks)"
 echo "  close-epic <Key>         (Final cleanup)"

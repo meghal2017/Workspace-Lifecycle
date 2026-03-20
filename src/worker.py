@@ -56,6 +56,7 @@ from activities import (
     transition_to_planning,
     transition_to_in_progress,
     transition_to_in_review,
+    transition_to_done,
 )
 from workflow import WorkspaceLCWorkflow
 
@@ -129,6 +130,7 @@ async def main() -> None:
             transition_to_planning,
             transition_to_in_progress,
             transition_to_in_review,
+            transition_to_done,
         ],
     ):
         logger.info(
