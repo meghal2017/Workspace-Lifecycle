@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from temporalio.client import Client
+from temporalio.common import WorkflowIDReusePolicy
 
 sys.path.insert(0, os.path.dirname(__file__))
 from workflow import WorkspaceLCWorkflow
@@ -79,6 +80,7 @@ async def start_workflow(client: Client, epic_id: str) -> None:
         epic_id,
         id=workflow_id,
         task_queue=TASK_QUEUE,
+        id_reuse_policy=WorkflowIDReusePolicy.TERMINATE_IF_RUNNING,
     )
 
     logger.info(
@@ -89,6 +91,7 @@ async def start_workflow(client: Client, epic_id: str) -> None:
         f"  Namespace   : {TEMPORAL_NAMESPACE}\n"
         f"  Task Queue  : {TASK_QUEUE}\n"
         f"{'='*60}\n"
+        f"Next step: approve-plan {epic_id}\n"
     )
 
 
@@ -104,24 +107,87 @@ async def approve_plan(client: Client, workflow_id: str) -> None:
     handle = client.get_workflow_handle(workflow_id)
     await handle.signal(WorkspaceLCWorkflow.approve_plan)
     logger.info("✅ Plan approved.")
+    print(f"Next step: status {workflow_id.replace('workspace-lc-', '')}")
 
 
 async def approve_subtask(client: Client, workflow_id: str, subtask_id: str) -> None:
     logger.info(f"Sending 'approve_subtask' signal for {subtask_id} to: {workflow_id}")
     handle = client.get_workflow_handle(workflow_id)
-    await handle.signal(WorkspaceLCWorkflow.approve_subtask, subtask_id)
+    await handle.signal(WorkspaceLCWorkflow.approve_subtask, subtask_id.upper())
     logger.info(f"✅ Subtask {subtask_id} approved.")
+    print(f"Next step: status {workflow_id.replace('workspace-lc-', '')}")
+
+
+async def terminate_workflow(client: Client, workflow_id: str) -> None:
+    """Terminate any existing workflow execution for a given key."""
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        await handle.terminate(reason="Manual reset for demo")
+        logger.info(f"✅ Terminated workflow: {workflow_id}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not terminate {workflow_id} (it may already be closed): {e}")
+
+
+async def query_subtask_status(client: Client, workflow_id: str) -> None:
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        states = await handle.query("subtask_status")
+        logger.info(f"\n{'='*50}\n  Subtask Status for {workflow_id}:\n")
+        if not states:
+            logger.info("  (No subtasks initialized yet)")
+        for sid, status in states.items():
+            # Modern icons for status
+            icon = "⚪"
+            if status == "DONE": icon = "✅"
+            elif status == "EXECUTING": icon = "⚙️ "
+            elif status == "WAITING_APPROVAL": icon = "👀"
+            elif status == "PLANNING": icon = "📅"
+            elif status == "APPROVED": icon = "🆗"
+            
+            logger.info(f"  {icon} {sid:12s} : {status}")
+        logger.info(f"\n{'='*50}\n")
+    except Exception as e:
+        logger.error(f"Failed to query subtask status: {e}")
 
 
 async def query_phase(client: Client, workflow_id: str) -> None:
     handle = client.get_workflow_handle(workflow_id)
-    phase    = await handle.query(WorkspaceLCWorkflow.current_phase)
-    logger.info(
-        f"\n{'='*40}\n"
-        f"  Workflow : {workflow_id}\n"
-        f"  Phase    : {phase}\n"
-        f"{'='*40}\n"
-    )
+    
+    # Get overall phase, epic status, and subtask states
+    phase  = await handle.query(WorkspaceLCWorkflow.current_phase)
+    epic_status = "Unknown"
+    try:
+        epic_status = await handle.query("epic_status")
+    except:
+        pass
+
+    states = {}
+    try:
+        states = await handle.query("subtask_status")
+    except:
+        pass # Older workflows might not have this query yet
+
+    print(f"\n{'='*55}")
+    print(f"  WORKSPACE DASHBOARD: {workflow_id}")
+    print(f"  EPIC STATUS        : {epic_status}")
+    print(f"  WORKFLOW PHASE     : {phase}")
+    print(f"{'='*55}")
+    
+    if states:
+        print("\n  Subtask Real-time Status dashboard:")
+        for sid, status in states.items():
+            icon = "⚪"
+            if status == "DONE": icon = "✅"
+            elif status == "FAILED": icon = "❌"
+            elif status == "EXECUTING": icon = "⚙️ "
+            elif status == "WAITING_APPROVAL": icon = "👀"
+            elif status == "PLANNING": icon = "📅"
+            elif status == "APPROVED": icon = "🆗"
+            print(f"  {icon} {sid:12s} : {status}")
+    else:
+        print("\n  (No subtasks initialized yet)")
+    
+    print(f"\n{'='*55}\n")
 
 
 async def print_jira_transitions(issue_key: str) -> None:
@@ -146,6 +212,8 @@ async def main() -> None:
     parser.add_argument("--close-epic",        metavar="WORKFLOW_ID", dest="close_epic", help="Send human_approve signal (final checkpoint)")
     parser.add_argument("--comment",           default="Approved!", help="Approval comment")
     parser.add_argument("--query",             metavar="WORKFLOW_ID", help="Query current workflow phase")
+    parser.add_argument("--status",            metavar="WORKFLOW_ID", help="Query detailed subtask status")
+    parser.add_argument("--terminate",         metavar="WORKFLOW_ID", dest="terminate_wf", help="Terminate a stuck workflow")
     parser.add_argument("--jira-transitions",  metavar="ISSUE_KEY", dest="jira_transitions", help="List Jira transitions for an issue")
     args = parser.parse_args()
 
@@ -163,6 +231,10 @@ async def main() -> None:
         await send_signal(client, args.close_epic, args.comment)
     elif args.query:
         await query_phase(client, args.query)
+    elif args.status:
+        await query_subtask_status(client, args.status)
+    elif args.terminate_wf:
+        await terminate_workflow(client, args.terminate_wf)
     else:
         await start_workflow(client, args.load_epic)
 

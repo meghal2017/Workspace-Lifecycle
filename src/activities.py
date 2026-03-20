@@ -16,18 +16,22 @@ from typing import Any, Dict, List
 from temporalio import activity
 
 import jira_client
+import jira_simulator
+from scenarios import SCENARIOS
 
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_SPECS_DIR = os.path.join(_PROJECT_ROOT, "specs")
+def _spec_epic_path(epic_key: str) -> str:
+    directory = jira_simulator.get_issue_dir(epic_key)
+    return os.path.join(directory, "spec_epic.md")
 
 
-def _spec_path() -> str:
-    os.makedirs(_SPECS_DIR, exist_ok=True)
-    return os.path.join(_SPECS_DIR, "Spec.md")
+def _subtask_spec_path(subtask_id: str) -> str:
+    directory = jira_simulator.get_issue_dir(subtask_id)
+    return os.path.join(directory, f"spec_{subtask_id}.md")
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +48,9 @@ async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
 
     # 1. Fetch main issue
     issue_data = await jira_client.get_issue(epic_id)
+    if not issue_data:
+        raise ValueError(f"Issue '{epic_id}' not found.")
+        
     fields = issue_data.get("fields", {})
     
     # 2. Fetch child issues
@@ -51,7 +58,10 @@ async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
     child_stories = []
     for child in child_issues:
         c_fields = child.get('fields', {})
-        c_desc = jira_client.adf_to_text(c_fields.get('description'))
+        # Note: simulator might return plain text description directly or in fields
+        c_desc = c_fields.get('description', '')
+        if isinstance(c_desc, dict): # Check if it's ADF
+             c_desc = jira_client.adf_to_text(c_desc)
         
         child_stories.append({
             "key": child['key'], 
@@ -64,16 +74,26 @@ async def ingest_jira_epic(epic_id: str) -> Dict[str, Any]:
     # 3. Parse ADF description
     description_text = jira_client.adf_to_text(fields.get("description"))
     
-    priority_name = fields.get("priority", {}).get("name", "Medium") if fields.get("priority") else "Medium"
-    status_name = fields.get("status", {}).get("name", "To Do") if fields.get("status") else "To Do"
+    # Handle status/priority as either strings (Simulator) or dicts (Jira API)
+    status_field = fields.get("status")
+    if isinstance(status_field, dict):
+        status_name = status_field.get("name", "To Do")
+    else:
+        status_name = str(status_field) if status_field else "To Do"
+
+    priority_field = fields.get("priority")
+    if isinstance(priority_field, dict):
+        priority_name = priority_field.get("name", "Medium")
+    else:
+        priority_name = str(priority_field) if priority_field else "Medium"
     
     epic = {
         "id": issue_data.get("id", ""),
         "key": issue_data.get("key", epic_id),
         "summary": fields.get("summary", ""),
         "description": description_text,
-        "assets": [],  # Could be pulled from attachment fields
-        "acceptance_criteria": [], # Often kept in description or custom fields
+        "assets": fields.get("assets", []),
+        "acceptance_criteria": fields.get("acceptance_criteria", []),
         "status": status_name,
         "priority": priority_name,
         "sprint": "Active Sprint",
@@ -173,11 +193,44 @@ async def generate_spec_v1(epic: Dict[str, Any]) -> str:
         content += f"- [ ] Implement core logic and file changes\n"
         content += f"- [ ] Run local verification suite\n\n"
 
-    path = _spec_path()
+    path = _spec_epic_path(epic['key'])
     with open(path, "w") as f:
         f.write(content)
 
-    logger.info(f"[generate_spec_v1] Spec.md v1 written to {path}")
+    logger.info(f"[generate_spec_v1] spec_epic.md written to {path}")
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Activity: Write Subtask Spec
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def write_subtask_spec(subtask_id: str, summary: str, plan_steps: List[str], epic_context: str) -> str:
+    """
+    Generate a dedicated spec file for a subtask.
+    """
+    logger = activity.logger
+    logger.info(f"[write_subtask_spec] Writing spec_{subtask_id}.md …")
+    
+    plan_md = "\n".join([f"- [ ] {s}" for s in plan_steps])
+    
+    content = f"""# Subtask Spec — {subtask_id}: {summary}
+
+## 1. Epic Context
+{epic_context}
+
+## 2. Implementation Plan
+{plan_md}
+
+## 3. Status
+Initialized
+"""
+    path = _subtask_spec_path(subtask_id)
+    with open(path, "w") as f:
+        f.write(content)
+
+    logger.info(f"[write_subtask_spec] Written to {path}")
     return path
 
 
@@ -238,8 +291,8 @@ async def execute_agent_resolution(subtask_id: str, summary: str, plan_steps: Li
     logger = activity.logger
     logger.info(f"[execute_agent_resolution] Agent working on {subtask_id}: {summary} …")
     
-    if jira_client.jira_enabled():
-        await jira_client.transition_to_in_progress(subtask_id)
+    # Transition to "In Progress"
+    await jira_client.transition_to_in_progress(subtask_id)
         
     await asyncio.sleep(2)  # simulate LLM latency
 
@@ -264,15 +317,15 @@ async def execute_agent_resolution(subtask_id: str, summary: str, plan_steps: Li
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def update_spec_v2(agent_results: List[str]) -> str:
+async def update_spec_v2(epic_id: str, agent_results: List[str]) -> str:
     """
-    Step 4 — Append combined agent task results to produce Spec.md v2.
+    Step 4 — Append combined agent task results to produce spec_epic.md v2.
     """
     logger = activity.logger
-    logger.info("[update_spec_v2] Updating Spec.md to v2 …")
+    logger.info(f"[update_spec_v2] Updating spec_epic.md to v2 for {epic_id} …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
-    path = _spec_path()
+    path = _spec_epic_path(epic_id)
     with open(path, "r") as f:
         existing = f.read()
 
@@ -311,21 +364,104 @@ async def update_jira_comment(issue_id: str, summary_comment: str) -> str:
     logger = activity.logger
     logger.info(f"[update_jira_comment] Posting progress comment to Jira issue {issue_id} …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    spec_ref = _spec_path()
+    # Determine the correct spec path based on issue depth
+    if len(issue_id.split("-")) >= 3:
+        spec_ref = _subtask_spec_path(issue_id)
+    else:
+        spec_ref = _spec_epic_path(issue_id)
 
     comment_text = (
         f"{summary_comment}\n\n"
         f"📄 Full details in the generated spec: {spec_ref}"
     )
 
-    if jira_client.jira_enabled():
-        # Comment on the specified issue
-        await jira_client.add_comment(issue_id, comment_text)
-        logger.info(f"[update_jira_comment] ✅ Real Jira comment posted to {issue_id}")
-    else:
-        logger.info(f"[update_jira_comment] [MOCK] Jira comment for {issue_id}:\n{comment_text}")
+    # Comment on the specified issue
+    await jira_client.add_comment(issue_id, comment_text)
+    logger.info(f"[update_jira_comment] Comment posted to {issue_id}")
 
     return f"Jira comment posted to {issue_id} at {now}"
+
+
+# ---------------------------------------------------------------------------
+# Activity: In Progress/Review Transitions
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def update_epic_spec_item(epic_id: str, subtask_id: str) -> None:
+    """Find the subtask section in spec_epic.md and check off all its items."""
+    path = _spec_epic_path(epic_id)
+    if not os.path.exists(path):
+        return
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    with open(path, "w") as f:
+        in_correct_section = False
+        for line in lines:
+            # Detect section start (e.g., ### Tasks for WL-1-101)
+            if line.startswith("###") and subtask_id in line:
+                in_correct_section = True
+                f.write(line)
+                continue
+            
+            # Detect start of another subtask section (ends current scope)
+            if in_correct_section and line.startswith("###") and subtask_id not in line:
+                in_correct_section = False
+                
+            # Perform replacement ONLY if we are in the correct subtask's implementation section
+            if in_correct_section and "[ ]" in line:
+                f.write(line.replace("[ ]", "[x]"))
+            else:
+                f.write(line)
+
+
+@activity.defn
+async def complete_subtask_spec(subtask_id: str) -> None:
+    """Mark the subtask-specific spec as DONE and check off all its internal items."""
+    path = _subtask_spec_path(subtask_id)
+    if not os.path.exists(path):
+        return
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    with open(path, "w") as f:
+        in_status_section = False
+        for line in lines:
+            # Check off any remaining items
+            if "[ ]" in line:
+                line = line.replace("[ ]", "[x]")
+            
+            # Update status section
+            if "## 3. Status" in line:
+                in_status_section = True
+                f.write(line)
+                continue
+            
+            if in_status_section and line.strip() and not line.startswith("#"):
+                f.write("DONE\n")
+                in_status_section = False
+            else:
+                f.write(line)
+
+
+@activity.defn
+async def transition_to_planning(issue_id: str) -> bool:
+    """Transition a Jira issue to 'Planning'."""
+    return await jira_client.transition_to_planning(issue_id)
+
+
+@activity.defn
+async def transition_to_in_progress(issue_id: str) -> bool:
+    """Transition a Jira issue to 'In Progress'."""
+    return await jira_client.transition_to_in_progress(issue_id)
+
+
+@activity.defn
+async def transition_to_in_review(issue_id: str) -> bool:
+    """Transition a Jira issue to 'In Review'."""
+    return await jira_client.transition_to_in_review(issue_id)
 
 
 # ---------------------------------------------------------------------------
@@ -346,15 +482,12 @@ async def close_jira_issue(issue_id: str, final_comment: str) -> str:
         f"This issue is now marked as Done."
     )
 
-    if jira_client.jira_enabled():
-        await jira_client.add_comment(issue_id, comment_text)
-        success = await jira_client.transition_to_done(issue_id)
-        if success:
-            logger.info(f"[close_jira_issue] ✅ Jira Issue {issue_id} transitioned to Done")
-        else:
-            logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for {issue_id}")
+    await jira_client.add_comment(issue_id, comment_text)
+    success = await jira_client.transition_to_done(issue_id)
+    if success:
+        logger.info(f"[close_jira_issue] Issue {issue_id} transitioned to Done")
     else:
-        logger.info(f"[close_jira_issue] [MOCK] Jira close for {issue_id}:\n{comment_text}")
+        logger.warning(f"[close_jira_issue] ⚠️ Could not find a 'Done' transition for {issue_id}")
 
     return f"Jira issue {issue_id} closed at {now}"
 
@@ -372,7 +505,7 @@ async def finalize_workspace(epic_id: str, approver_comment: str) -> str:
     logger.info(f"[finalize_workspace] Finalizing workspace for {epic_id} …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
-    path = _spec_path()
+    path = _spec_epic_path(epic_id)
     with open(path, "r") as f:
         existing = f.read()
 
@@ -385,8 +518,8 @@ async def finalize_workspace(epic_id: str, approver_comment: str) -> str:
         f"*This workspace lifecycle run is complete.*\n"
     )
 
-    with open(path, "a") as f:
-        f.write(footer)
+    with open(path, "w") as f:
+        f.write(existing + footer)
 
     logger.info(f"[finalize_workspace] Workspace for {epic_id} sealed and finalized.")
     return f"Workspace for {epic_id} successfully finalized."
@@ -397,8 +530,7 @@ async def finalize_workspace(epic_id: str, approver_comment: str) -> str:
 
 @activity.defn
 async def post_implementation_plan(epic_id: str, spec_path: str) -> None:
-    """Read the To-Do list from Spec.md and post it as a comment on the Epic."""
-    if not jira_client.jira_enabled(): return
+    """Read the To-Do list from the spec file and post it as a comment on the Epic."""
 
     try:
         with open(spec_path, "r") as f:
@@ -419,14 +551,13 @@ async def post_implementation_plan(epic_id: str, spec_path: str) -> None:
 
 @activity.defn
 async def post_spec_artifact(epic_id: str, spec_path: str) -> None:
-    """Post the entire Spec.md file content as a markdown comment artifact."""
-    if not jira_client.jira_enabled(): return
+    """Post the entire spec file content as a markdown comment artifact."""
 
     try:
         with open(spec_path, "r") as f:
             content = f.read()
         
-        artifact_block = f"📂 **Spec.md Full Artifact Repository**\n\n{content}"
+        artifact_block = f"📂 **spec_epic.md Full Artifact Repository**\n\n{content}"
         await jira_client.add_comment(epic_id, artifact_block)
         activity.logger.info(f"[post_spec_artifact] Full spec artifact posted to {epic_id}")
     except Exception as e:
@@ -440,7 +571,7 @@ async def post_spec_artifact(epic_id: str, spec_path: str) -> None:
 @activity.defn
 async def update_spec_v3(epic_id: str) -> str:
     """
-    Step 7 — Fetch Jira development summary and append to Spec.md as v3.
+    Step 7 — Fetch Jira development summary and append to spec_epic.md as v3.
     """
     logger = activity.logger
     logger.info(f"[update_spec_v3] Fetching Jira Development Summary for {epic_id} …")
@@ -454,7 +585,7 @@ async def update_spec_v3(epic_id: str) -> str:
         f"- **Deployments:** Staging completed successfully.\n"
     )
 
-    path = _spec_path()
+    path = _spec_epic_path(epic_id)
     with open(path, "r") as f:
         existing = f.read()
 
@@ -472,5 +603,5 @@ async def update_spec_v3(epic_id: str) -> str:
     with open(path, "w") as f:
         f.write(updated + summary_section)
 
-    logger.info(f"[update_spec_v3] Spec.md v3 written to {path}")
+    logger.info(f"[update_spec_v3] spec_epic.md v3 written to {path}")
     return path

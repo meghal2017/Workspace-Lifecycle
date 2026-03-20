@@ -110,6 +110,35 @@ class TestGenerateSpecV1:
         assert "Implementation Strategy" in content
 
 
+
+class TestOfflineIngest:
+    @pytest.mark.asyncio
+    async def test_ingest_fallback_when_jira_disabled(self, monkeypatch):
+        import jira_client
+        # Ensure jira is "disabled"
+        monkeypatch.setattr(jira_client, "jira_enabled", lambda: False)
+        
+        from activities import ingest_jira_epic
+        # 'profile' is a valid scenario in scenarios.py
+        result = await ingest_jira_epic("profile")
+        
+        assert result["key"] == "PROFILE"
+        assert "User Profile Management" in result["summary"]
+        assert len(result["child_stories"]) == 3
+        # Check child stories formatting
+        assert result["child_stories"][0]["key"].startswith("PROFILE-")
+        assert "UI: Build Profile React Component" in result["child_stories"][0]["summary"]
+
+    @pytest.mark.asyncio
+    async def test_ingest_raises_on_invalid_scenario(self, monkeypatch):
+        import jira_client
+        monkeypatch.setattr(jira_client, "jira_enabled", lambda: False)
+        
+        from activities import ingest_jira_epic
+        with pytest.raises(ValueError, match="Scenario 'invalid' not found"):
+            await ingest_jira_epic("invalid")
+
+
 class TestAgentTasks:
     def test_security_analysis_returns_string(self, sample_epic):
         from activities import run_security_analysis

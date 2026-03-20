@@ -13,10 +13,13 @@ All methods raise httpx.HTTPStatusError on non-2xx responses.
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import jira_simulator
 
 # ---------------------------------------------------------------------------
 # Credentials helpers
@@ -37,11 +40,23 @@ def _headers() -> Dict[str, str]:
     }
 
 def jira_enabled() -> bool:
-    """Return True when all required Jira env vars are present."""
-    return all(
+    """Return True when all required Jira env vars are present, 
+    unless JIRA_OFFLINE is explicitly set to 'true'.
+    """
+    offline_env = os.environ.get("JIRA_OFFLINE", "").lower()
+    if offline_env == "true":
+        logging.info("[JIRA_CLIENT] Jira is OFFLINE (JIRA_OFFLINE=true). Routing to Simulator.")
+        return False
+        
+    enabled = all(
         os.environ.get(k)
         for k in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_API_TOKEN")
     )
+    if not enabled:
+        logging.info("[JIRA_CLIENT] Jira is OFFLINE (Missing Credentials). Routing to Simulator.")
+    else:
+        logging.info("[JIRA_CLIENT] Jira is ONLINE. Routing to real Atlassian API.")
+    return enabled
 
 
 # ---------------------------------------------------------------------------
@@ -59,9 +74,12 @@ def _adf_text(text: str) -> Dict[str, Any]:
     return {"type": "doc", "version": 1, "content": paragraphs}
 
 
-def adf_to_text(adf: Optional[Dict[str, Any]]) -> str:
+def adf_to_text(adf: Any) -> str:
     """Parse a Jira ADF document back to a simplified plain text/markdown string."""
-    if not adf or adf.get("type") != "doc":
+    if isinstance(adf, str):
+        return adf
+        
+    if not adf or not isinstance(adf, dict) or adf.get("type") != "doc":
         return ""
     
     lines = []
@@ -108,8 +126,11 @@ def adf_to_text(adf: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines).strip()
 
 
-async def get_issue(issue_key: str) -> Dict[str, Any]:
-    """Fetch a Jira issue and return the raw JSON dict."""
+async def get_issue(issue_key: str) -> dict:
+    """Fetch a single issue's details."""
+    if not jira_enabled():
+        return jira_simulator.get_issue(issue_key)
+
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.get(url, headers=_headers())
@@ -119,6 +140,9 @@ async def get_issue(issue_key: str) -> Dict[str, Any]:
 
 async def search_issues(jql: str) -> List[Dict[str, Any]]:
     """Search for issues using JQL."""
+    if not jira_enabled():
+        return jira_simulator.search_issues(jql)
+
     url = f"{_base_url()}/rest/api/3/search/jql"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.get(url, headers=_headers(), params={"jql": jql, "maxResults": 100})
@@ -135,14 +159,21 @@ async def search_issues(jql: str) -> List[Dict[str, Any]]:
         return issues
 
 
-async def get_child_issues(epic_key: str) -> List[Dict[str, Any]]:
-    """Fetch the child issues (stories/tasks) belonging to an Epic."""
-    jql = f'parent = "{epic_key}" OR issue in linkedIssues("{epic_key}")'
+async def get_child_issues(parent_key: str) -> list:
+    """Identify child stories linked to an Epic."""
+    if not jira_enabled():
+        return jira_simulator.get_child_issues(parent_key)
+
+    jql = f'"Epic Link" = {parent_key} OR parent = {parent_key}'
     return await search_issues(jql)
 
 
 async def delete_issue(issue_key: str) -> None:
     """Delete a Jira issue."""
+    if not jira_enabled():
+        jira_simulator.delete_issue(issue_key)
+        return
+
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.delete(url, headers=_headers())
@@ -151,6 +182,9 @@ async def delete_issue(issue_key: str) -> None:
 
 async def create_issue(fields: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new Jira issue with the given fields."""
+    if not jira_enabled():
+        return jira_simulator.create_issue(fields)
+
     url = f"{_base_url()}/rest/api/3/issue"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.post(url, headers=_headers(), json={"fields": fields})
@@ -160,6 +194,10 @@ async def create_issue(fields: Dict[str, Any]) -> Dict[str, Any]:
 
 async def link_issue(inward_key: str, outward_key: str, link_type_name: str = "Relates") -> None:
     """Create an issue link between two issues."""
+    if not jira_enabled():
+        jira_simulator.link_issue(inward_key, outward_key, link_type_name)
+        return
+
     url = f"{_base_url()}/rest/api/3/issueLink"
     payload = {
         "type": {"name": link_type_name},
@@ -171,20 +209,27 @@ async def link_issue(inward_key: str, outward_key: str, link_type_name: str = "R
         resp.raise_for_status()
 
 
-async def add_comment(issue_key: str, text: str) -> None:
-    """Post a plain-text comment on a Jira issue."""
+async def add_comment(issue_key: str, body: str) -> None:
+    """Post a comment to a Jira issue."""
+    if not jira_enabled():
+        jira_simulator.add_comment(issue_key, body)
+        return
+
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/comment"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.post(
             url,
             headers=_headers(),
-            json={"body": _adf_text(text)},
+            json={"body": _adf_text(body)},
         )
         resp.raise_for_status()
 
 
 async def get_transitions(issue_key: str) -> List[Dict[str, Any]]:
     """Return available workflow transitions for a Jira issue."""
+    if not jira_enabled():
+        return jira_simulator.get_transitions(issue_key)
+
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/transitions"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.get(url, headers=_headers())
@@ -193,7 +238,18 @@ async def get_transitions(issue_key: str) -> List[Dict[str, Any]]:
 
 
 async def transition_issue(issue_key: str, transition_id: str) -> None:
-    """Transition a Jira issue (e.g. move to Done)."""
+    """Transition an issue status."""
+    if not jira_enabled():
+        # Map transition_id to a mock status if we want high fidelity
+        # For now, we'll just log it or pass a default status
+        status_map = {
+            os.environ.get("JIRA_DONE_TRANSITION_ID", "done"): "Done",
+            "31": "In Progress" # Example ID, might need to be dynamic
+        }
+        status_name = status_map.get(transition_id, f"Phase: {transition_id}")
+        jira_simulator.transition_issue(issue_key, status_name)
+        return
+
     url = f"{_base_url()}/rest/api/3/issue/{issue_key}/transitions"
     async with httpx.AsyncClient(auth=_auth_tuple()) as client:
         resp = await client.post(
@@ -216,11 +272,37 @@ async def _find_transition(issue_key: str, target_states: List[str]) -> Optional
     return None
 
 
+async def transition_to_planning(issue_key: str) -> bool:
+    """Attempt to transition an issue to a 'Planning' state.
+    Returns True if successfully transitioned, False if no matching transition was found.
+    """
+    targets = ["planning", "plan", "ready", "open", "to do"]
+    transition_id = await _find_transition(issue_key, targets)
+    if not transition_id:
+        return False
+        
+    await transition_issue(issue_key, transition_id)
+    return True
+
+
 async def transition_to_in_progress(issue_key: str) -> bool:
     """Attempt to transition an issue to an active 'In Progress' state.
     Returns True if successfully transitioned, False if no matching transition was found.
     """
     targets = ["in progress", "start progress", "active", "doing", "open"]
+    transition_id = await _find_transition(issue_key, targets)
+    if not transition_id:
+        return False
+        
+    await transition_issue(issue_key, transition_id)
+    return True
+
+
+async def transition_to_in_review(issue_key: str) -> bool:
+    """Attempt to transition an issue to an 'In Review' state.
+    Returns True if successfully transitioned, False if no matching transition was found.
+    """
+    targets = ["in review", "review", "peer review", "pending review", "feedback"]
     transition_id = await _find_transition(issue_key, targets)
     if not transition_id:
         return False

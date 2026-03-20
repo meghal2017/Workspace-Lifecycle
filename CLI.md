@@ -18,6 +18,10 @@ Open **Terminal 2** and start the Worker (ensure your virtual environment is act
 ```bash
 python3 src/worker.py
 ```
+*To force the worker into **Offline Mode** (ignoring Jira credentials), use the `--offline` flag:*
+```bash
+python3 src/worker.py --offline
+```
 
 Finally, oOpen **Terminal 3** to run the CLI commands below. First, configure your terminal session with the provided shortcut script:
 ```bash
@@ -26,7 +30,14 @@ source setup_demo.sh
 
 ---
 
-## 1. Load the Epic
+## 1. Setup Simulation (Offline)
+
+To run fully offline (even with Jira credentials in `.env`), initialize the simulation first:
+```bash
+setup-demo --scenario profile --offline
+```
+
+## 2. Load the Epic
 
 Kick off the workflow by telling it which Jira Epic to process.
 
@@ -36,17 +47,25 @@ load-epic EPIC-001
 
 * **What happens:** The workflow starts, ingests `EPIC-001`, and generates the initial `specs/Spec.md` v1 (including the Implementation Plan). It then pauses unconditionally so you can review the generated plan.
 
-## 2. Start Work (Agent Scans)
+## 2. Approve the Plan
 
-Once you're ready to proceed, trigger the simulated AI agents.
+Once you've reviewed the generated `specs/Spec.md` v1, you must approve the plan to unblock the parallel agent tasks.
 
 ```bash
-start-work EPIC-001
+approve-plan EPIC-001
 ```
 
-* **What happens:** The workflow resumes and executes the Security Analysis and Architecture Review activities in parallel. Once they finish, they append their findings to `Spec.md` v2, post an update comment to Jira, and pause for human review.
+* **What happens:** The workflow resumes and launches the parallel multi-agent loop. Each subtask will now perform its own dynamic planning and execution.
 
-## 3. Approve Work
+## 3. Approve Subtasks
+
+As each agent finishes its work, it will post a resolution to Jira (or log it in Offline Mode). You must approve each subtask individually.
+
+```bash
+approve-subtask EPIC-001 <SUBTASK_ID>
+```
+
+## 4. Approve Work
 
 Review the agent findings inside `specs/Spec.md`. If they look good, approve them and optionally leave a reviewer comment.
 
@@ -56,7 +75,7 @@ approve-work EPIC-001 -comment "Agent results look solid, ready for final human 
 
 * **What happens:** The workflow records your approval comment, but pauses *one last time* at the final human checkpoint.
 
-## 4. Close Epic (Final Approval)
+## 5. Close Epic (Final Approval)
 
 Give the ultimate sign-off to finalize the workspace and close the Jira issue.
 

@@ -13,18 +13,25 @@ from env_loader import load_env
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Teardown an Epic and its children.")
+    parser.add_argument("epic_key", nargs="?", help="Epic key to teardown (e.g. WL-1 or PROFILE)")
+    parser.add_argument("--offline", action="store_true", help="Teardown from the simulation directory.")
+    args = parser.parse_args()
+
     load_env(override=True)
-    if not jira_client.jira_enabled():
-        print("❌ Error: Jira credentials not set in environment.")
+    if args.offline:
+        os.environ["JIRA_OFFLINE"] = "true"
+    elif not jira_client.jira_enabled():
+        print("❌ Error: Jira credentials not set. Use --offline to teardown simulated data.")
         sys.exit(1)
 
-    if len(sys.argv) < 2:
-        print("Usage: python3 teardown_jira_demo.py <EPIC_KEY>")
-        print("Example: python3 teardown_jira_demo.py WL-1")
+    if not args.epic_key:
+        parser.print_help()
         sys.exit(1)
 
-    epic_key = sys.argv[1]
-    print(f"🗑️  Tearing down test Epic '{epic_key}' and its children...\n")
+    epic_key = args.epic_key
+    print(f"🗑️  Tearing down Epic '{epic_key}' (Offline: {args.offline})...\n")
 
     # Fetch child issues
     try:

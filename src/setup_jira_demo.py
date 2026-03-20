@@ -8,6 +8,11 @@ import os
 import sys
 import random
 import argparse
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("setup-jira-demo")
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,83 +25,7 @@ from datetime import datetime, timezone, timedelta
 # Scenario Registry
 # ---------------------------------------------------------------------------
 
-SCENARIOS = {
-    "profile": {
-        "summary": "Feature: User Profile Management",
-        "description": "As a user, I want to manage my personal information, notification preferences, and billing details in one place.",
-        "acceptance_criteria": [
-            "User can view their avatar, name, and email.",
-            "User can update notification toggles (Email/SMS).",
-            "Billing history displays a list of recent transactions.",
-            "Mobile-responsive design across all breakpoints."
-        ],
-        "labels": ["frontend", "profile", "v1.0"],
-        "children": [
-            {
-                "summary": "UI: Build Profile React Component",
-                "desc": "Develop the React frontend with state management for profile forms."
-            },
-            {
-                "summary": "Backend: Add GET/PUT /api/user/profile Endpoints",
-                "desc": "Implement Node.js/Python endpoints with database integration."
-            },
-            {
-                "summary": "Testing: E2E Cypress Tests for Profile",
-                "desc": "Automated regression suite for name updates and validation errors."
-            }
-        ]
-    },
-    "auth": {
-        "summary": "Security: Multi-Factor Authentication (MFA)",
-        "description": "Improve platform security by implementing Time-based One-Time Password (TOTP) for all administrative accounts.",
-        "acceptance_criteria": [
-            "Enable TOTP secret generation via QR code.",
-            "Enforce MFA challenge on login for 'Admin' role.",
-            "Provide backup recovery codes for users.",
-            "Audit logs must record all MFA enablement events."
-        ],
-        "labels": ["security", "auth", "critical"],
-        "children": [
-            {
-                "summary": "Logic: TOTP Secret Generation & QR API",
-                "desc": "Implement the core vault logic for secret storage and QR code generation."
-            },
-            {
-                "summary": "UI: MFA Setup & Verification Screens",
-                "desc": "Design the setup flow and the challenge prompt UI."
-            },
-            {
-                "summary": "Audit: Integration with Security Logs",
-                "desc": "Ensure all MFA attempts are logged for compliance monitoring."
-            }
-        ]
-    },
-    "search": {
-        "summary": "Platform: Semantic Product Search",
-        "description": "Replace existing keyword search with a vector-based semantic search to improve discovery relevance.",
-        "acceptance_criteria": [
-            "Support natural language queries (e.g., 'warm winter gear').",
-            "Latency must remain under 200ms for 95th percentile.",
-            "Integrate with Pinecone/Milvus vector database.",
-            "Highlight relevant keywords in search results."
-        ],
-        "labels": ["platform", "search", "ai"],
-        "children": [
-            {
-                "summary": "Infra: Provision Vector DB & Indexing",
-                "desc": "Set up the vector database and pipeline for product indexing."
-            },
-            {
-                "summary": "Model: Deploy Embedding Inference Service",
-                "desc": "Host the NLP model to convert queries into vectors."
-            },
-            {
-                "summary": "UI: New Search Results Layout",
-                "desc": "Build a modern masonry-style grid for displayed products."
-            }
-        ]
-    }
-}
+from scenarios import SCENARIOS
 
 async def add_to_active_sprint(project_key: str, issue_keys: list):
     """Attempt to find the project board and move issues into an active sprint."""
@@ -132,15 +61,30 @@ async def add_to_active_sprint(project_key: str, issue_keys: list):
             print(f"   ⚠️ Agile/Sprint move failed: {e}")
 
 async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", help="Specific scenario key (profile, auth, search)")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Bootstrap a Jira Epic for the demo workflow.")
+    parser.add_argument("--scenario", default="profile", choices=SCENARIOS.keys(), help="Which scenario to use.")
+    parser.add_argument("--offline", action="store_true", help="Force run in Offline Mode (ignore Jira credentials)")
+    args = parser.parse_known_args()[0]
 
     load_env(override=True)
-    if not jira_client.jira_enabled():
-        print("❌ Error: Jira credentials not set.")
-        sys.exit(1)
 
+    if args.offline or not jira_client.jira_enabled():
+        logger.info(f"Offline Mode: Initializing simulation for scenario '{args.scenario}'...")
+        import jira_simulator
+        
+        # Generate a "Real-looking" Key (e.g. SIM-1 or project-key-1)
+        project_key = os.environ.get("JIRA_PROJECT_KEY", "SIM")
+        # Ensure we have a unique-ish number for the session
+        num = len(jira_simulator.search_issues('')) + 1
+        sim_key = f"{project_key}-{num}"
+        
+        jira_simulator.initialize_scenario(args.scenario, SCENARIOS[args.scenario], key=sim_key)
+        
+        print(f"\n✅ Simulation initialized as {sim_key}")
+        print(f"Next step: load-epic {sim_key}\n")
+        return
+
+    # Online mode logic continues...
     project_key = os.environ.get("JIRA_PROJECT_KEY")
     if not project_key:
         print("❌ Error: JIRA_PROJECT_KEY not found.")
@@ -204,7 +148,7 @@ async def main():
     await add_to_active_sprint(project_key, [parent_key] + child_keys)
 
     print(f"\n🎉 Demo setup complete! Scenario: {s_key}")
-    print(f"Next step: ./bin/cli.sh load-epic {parent_key}")
+    print(f"Next step: load-epic {parent_key}")
 
 if __name__ == "__main__":
     asyncio.run(main())
