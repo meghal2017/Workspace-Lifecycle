@@ -95,7 +95,9 @@ def link_issue(inward: str, outward: str, type_name: str):
 
 def get_transitions(key: str) -> list:
     return [
+        {"id": "planning", "name": "Planning"},
         {"id": "31", "name": "In Progress"},
+        {"id": "review", "name": "In Review"},
         {"id": "done", "name": "Done"}
     ]
 

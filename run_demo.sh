@@ -5,30 +5,100 @@ set -e
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 STARTER="python3 $DIR/src/starter.py"
+SETUP_JIRA="python3 $DIR/src/setup_jira_demo.py"
+TEARDOWN_JIRA="python3 $DIR/src/teardown_jira_demo.py"
+
+SCENARIO="profile"
+OFFLINE=""
+
+# Simple argument parsing
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --scenario) SCENARIO="$2"; shift ;;
+        --offline) OFFLINE="--offline" ;;
+        *) SCENARIO="$1" ;; # Positional argument as scenario
+    esac
+    shift
+done
 
 echo "=========================================================="
-echo "Workspace Lifecycle Worker — Demo Shortcut"
+echo "Workspace Lifecycle Worker — Multi-Agent Loop Demo"
+echo "  Mode: ${OFFLINE:-online}"
 echo "=========================================================="
 
-echo -e "\n1. Loading Epic (EPIC-001)..."
-$STARTER --load-epic EPIC-001
+echo -e "\n1. Initializing Demo Scenario: $SCENARIO..."
+# Run setup and capture output to find the new Epic Key
+SETUP_OUTPUT=$($SETUP_JIRA --scenario "$SCENARIO" $OFFLINE)
+echo "$SETUP_OUTPUT"
 
-echo -e "\n⏳ Press Enter to trigger the analysis agents (start-work)..."
+EPIC_ID=$(echo "$SETUP_OUTPUT" | grep "Next step: load-epic" | awk '{print $NF}')
+
+if [ -z "$EPIC_ID" ]; then
+    echo "❌ Error: Could not extract Epic Key from setup output."
+    exit 1
+fi
+
+echo -e "\n   Press Enter to LOAD IT into the workflow: $EPIC_ID..."
 read
 
-echo -e "\n2. Starting Work (Agent Scans)..."
-$STARTER --start-work workspace-lc-EPIC-001
+EPIC_ID_LOWER=$(echo "$EPIC_ID" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+WORKFLOW_ID="workspace-lc-$EPIC_ID_LOWER"
 
-echo -e "\n⏳ Press Enter to approve the agent results (approve-work)..."
+echo -e "\n2. Loading $EPIC_ID..."
+$STARTER --load-epic "$EPIC_ID"
+
+echo -e "\n   Review v1: simulated_jira/$EPIC_ID/spec_epic.md"
+echo "   Press Enter to APPROVE the plan..."
 read
 
-echo -e "\n3. Approving Work..."
-$STARTER --approve-work workspace-lc-EPIC-001 --comment "Looks correct"
+echo -e "\n3. Approving Plan..."
+$STARTER --approve-plan "$WORKFLOW_ID"
 
-echo -e "\n⏳ Press Enter to finalize the workspace (close-epic)..."
+echo -e "\n   🚀 Plan Approved! Waiting 5s for agents to start work..."
+sleep 5
+
+echo "   Press Enter to query the DASHBOARD..."
+read
+$STARTER --status "$WORKFLOW_ID"
+
+echo -e "\n4. Approving Subtasks..."
+SUBTASKS=$($STARTER --list-subtasks "$WORKFLOW_ID")
+
+if [ -z "$SUBTASKS" ]; then
+    echo "⚠️ Waiting for subtasks..."
+    sleep 2
+    SUBTASKS=$($STARTER --list-subtasks "$WORKFLOW_ID")
+fi
+
+echo "   Press Enter to approve ALL subtasks: $SUBTASKS"
 read
 
-echo -e "\n4. Closing Epic (Final Approval)..."
-$STARTER --close-epic workspace-lc-EPIC-001 --comment "Ship it"
+for SID in $SUBTASKS; do
+    echo "   Approving $SID..."
+    $STARTER --approve-subtask "$WORKFLOW_ID" "$SID"
+done
 
-echo -e "\nDone! Check the specs/Spec.md file for the final output."
+echo -e "\n   Final Results Ready. Checking status..."
+$STARTER --status "$WORKFLOW_ID"
+
+echo -e "\n   Ready to close the workspace."
+echo "   Press Enter to send the FINAL sign-off..."
+read
+
+echo -e "\n5. Closing Epic..."
+$STARTER --close-epic "$WORKFLOW_ID" --comment "Demo complete."
+
+echo -e "\n   Review v3: simulated_jira/$EPIC_ID/spec_epic.md"
+echo "   Press Enter to continue to teardown step..."
+read
+
+echo -en "\n❓ Tear down the demo data $EPIC_ID? (y/n): "
+read -r CONFIRM
+if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo -e "\n6. Tearing down demo data..."
+    $TEARDOWN_JIRA "$EPIC_ID" $OFFLINE
+else
+    echo -e "\nSkipping teardown."
+fi
+
+echo -e "\n✅ Demo complete!"

@@ -119,7 +119,7 @@ async def generate_spec_v1(epic: Dict[str, Any]) -> str:
     Step 2 — Write the initial Spec.md (v1) from the raw epic context (t0).
     """
     logger = activity.logger
-    logger.info("[generate_spec_v1] Writing Spec.md v1 …")
+    logger.info("[generate_spec_v1] Writing spec_epic.md v1 …")
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
     # Detect whether we're talking to a local or Cloud Temporal server

@@ -60,6 +60,13 @@ In **Online Mode**, this fetches a real Jira issue. In **Offline Mode**, this lo
 load-epic profile
 ```
 
+### 2.1 Get Sample Commands (Optional)
+
+If you're unsure of the next steps for a specific Epic, see a list of relevant commands:
+```bash
+sample-commands WL-123
+```
+
 ### 2. Approve Plan
 
 Review the generated spec in `specs/Spec.md` and approve the high-level plan. This unblocks the parallel agent loops for each child task.

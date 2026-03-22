@@ -47,6 +47,16 @@ load-epic EPIC-001
 
 * **What happens:** The workflow starts, ingests `EPIC-001`, and generates the initial `specs/Spec.md` v1 (including the Implementation Plan). It then pauses unconditionally so you can review the generated plan.
 
+## 2.1 Get Sample Commands (Optional)
+
+If you're not sure which commands to run next for your epic, use the `sample-commands` helper.
+
+```bash
+sample-commands EPIC-001
+```
+
+* **What happens:** The CLI prints a list of all relevant commands with your Epic Name already filled in, making it easy to copy and paste.
+
 ## 2. Approve the Plan
 
 Once you've reviewed the generated `specs/Spec.md` v1, you must approve the plan to unblock the parallel agent tasks.
