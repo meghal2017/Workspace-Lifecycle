@@ -26,7 +26,11 @@ The Jira integration acts as the **data-access layer** for the workspace lifecyc
 ## Communication Guidelines
 To maintain high readability and "human-like" interactions:
 1. **No Bot Boilerplate**: Avoid automated disclaimers like "Status Updated by Workflow".
-2. **Dynamic Plans**: Implementation plans are generated at runtime by the agent. They are NOT stored in the demo data.
+2. **Dynamic Planning (`generate_subtask_plan`)**:
+    - The agent analyzes the specific task summary (e.g., "UI: Build Profile Component") and the broader Epic description.
+    - In **Offline Mode**, this uses the `src/scenarios.py` registry to provide consistent mock data for demonstration purposes.
+    - It generates a list of realistic implementation steps (e.g., "Create React component", "Write HSL styles", "Add unit tests").
+    - This plan is posted to Jira (or logged in offline mode) to provide a human-readable roadmap.
 3. **Approval Stamps**: Every approved subtask resolution is stamped with a human approval comment for traceability.
 4. **Spec Artifact**: The complete `Spec.md` content is posted as a markdown artifact comment on the Epic for a unified project view.
 
@@ -36,6 +40,14 @@ To maintain high readability and "human-like" interactions:
 - Requires **Basic Auth**: `base64(email:api_token)`
 - Token is generated at: [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
 - Use `load_env(override=True)` to ensure local environment variables take precedence.
+
+---
+
+## Offline Mode
+The system supports a **True Offline Mode** for development and demos when Jira is unavailable:
+- **Trigger**: Set `JIRA_OFFLINE=true` or start the worker with the `--offline` flag.
+- **Mock Ingestion**: `ingest_jira_epic` falls back to the `src/scenarios.py` registry, loading hardcoded Epics and Story hierarchies based on the provided ID (e.g., `profile`, `auth`, `search`).
+- **Mock Interactions**: Commenting and transitions log `[MOCK]` indicators to the console instead of making API calls.
 
 ---
 

@@ -10,8 +10,9 @@ For every subtask discovered in the Jira Epic, the Temporal workflow launches a 
 
 1.  **Dynamic Planning (`generate_subtask_plan`)**:
     - The agent analyzes the specific task summary (e.g., "UI: Build Profile Component") and the broader Epic description.
+    - **Offline Support**: In Offline Mode, this activity consumes mock data from the `src/scenarios.py` registry to ensure consistent and predictable demo behavior.
     - It generates a list of realistic implementation steps (e.g., "Create React component", "Write HSL styles", "Add unit tests").
-    - This plan is posted to Jira to provide a human-readable roadmap.
+    - This plan is posted to Jira (or logged) to provide a human-readable roadmap.
 
 2.  **Execution (`execute_agent_resolution`)**:
     - The agent simulates the actual coding and testing phase based on the generated plan.

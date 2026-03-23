@@ -19,8 +19,8 @@ This project is built using [Temporal](https://temporal.io/), a durable executio
     pip install -r requirements.txt
     ```
 2.  **Environment Variables**: Copy `.env.example` to `.env`.
-    *   To use the **mock Jira data** (default), leave the Jira fields blank or commented out.
-    *   To connect to a **real Jira instance**, fill in your Jira base URL, email, API token, project key, and the transition ID for "Done".
+    *   **Offline Mode (Default)**: If you leave `JIRA_API_TOKEN` unset, the worker will operate in Offline Mode. It will ingest mock data from a local scenario registry (`src/scenarios.py`) instead of calling the Jira API.
+    *   **Online Mode**: To connect to a real Jira instance, fill in your Jira base URL, email, API token, and project key.
 3.  **Temporal Server**: Ensure a Temporal Server is running locally.
     ```bash
     temporal server start-dev
@@ -29,6 +29,10 @@ This project is built using [Temporal](https://temporal.io/), a durable executio
 4.  **Worker**: Start the background Temporal Worker.
     ```bash
     python3 src/worker.py
+    ```
+    *To force the worker to run in **Offline Mode** (ignoring any Jira credentials in `.env`), use the `--offline` flag:*
+    ```bash
+    python3 src/worker.py --offline
     ```
 
 ## Usage
@@ -41,12 +45,26 @@ source setup_demo.sh
 
 > **Tip:** While running the workflow commands below, open the [Temporal Web UI (http://localhost:8233)](http://localhost:8233) to watch the execution state machine progress in real-time.
 
-### 1. Load an Epic
+### 1. Setup Simulation (Offline)
 
-Start the workflow and fetch the Jira Epic. This generates `specs/Spec.md` v1, containing the Epic details. The workflow then waits for the initial plan approval.
+If you are running in Offline Mode, initialize the mock data first:
+```bash
+setup-demo --scenario profile --offline
+```
+
+### 2. Load an Epic / Scenario
+
+In **Online Mode**, this fetches a real Jira issue. In **Offline Mode**, this loads a mock scenario (e.g., `profile`, `auth`, `search`).
 
 ```bash
-load-epic WL-123
+load-epic profile
+```
+
+### 2.1 Get Sample Commands (Optional)
+
+If you're unsure of the next steps for a specific Epic, see a list of relevant commands:
+```bash
+sample-commands WL-123
 ```
 
 ### 2. Approve Plan
@@ -57,12 +75,18 @@ Review the generated spec in `specs/Spec.md` and approve the high-level plan. Th
 approve-plan WL-123
 ```
 
-### 3. Approve Subtasks
+### 3. Check Real-time Status
 
-As each agent completes its specific subtask (e.g., UI, Backend, Testing), you can review the results posted to Jira and approve them individually.
-
+Get a dashboard view of all agents and the overall Epic phase:
 ```bash
-approve-subtask WL-123 WL-124
+query-wf WL-1
+```
+
+### 4. Approve Subtasks (Incremental)
+
+As each agent completes its work, follow the "Next step" guide to approve them individually.
+```bash
+approve-subtask WL-1 WL-1-101
 ```
 
 ### 4. Close Epic (Final Approval)

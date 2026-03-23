@@ -35,6 +35,13 @@ with workflow.unsafe.imports_passed_through():
         post_implementation_plan,
         post_spec_artifact,
         generate_subtask_plan,
+        write_subtask_spec,
+        update_epic_spec_item,
+        complete_subtask_spec,
+        transition_to_planning,
+        transition_to_in_progress,
+        transition_to_in_review,
+        transition_to_done,
     )
 
 # ---------------------------------------------------------------------------
@@ -66,6 +73,7 @@ class WorkspaceLCWorkflow:
         # Signals
         self._plan_approved: bool = False
         self._subtask_approvals: Dict[str, bool] = {}
+        self._subtask_states: Dict[str, str] = {} # sid -> status
         self._final_approved: bool = False
         self._final_comment: str = ""
 
@@ -82,8 +90,9 @@ class WorkspaceLCWorkflow:
     @workflow.signal
     async def approve_subtask(self, subtask_id: str) -> None:
         """Signal to approve a specific agent's work on a subtask."""
-        workflow.logger.info(f"[signal] approve_subtask received for {subtask_id}")
-        self._subtask_approvals[subtask_id] = True
+        sid_upper = subtask_id.upper()
+        workflow.logger.info(f"[signal] approve_subtask received for {sid_upper}")
+        self._subtask_approvals[sid_upper] = True
 
     @workflow.signal
     async def human_approve(self, comment: str = "Approved") -> None:
@@ -99,6 +108,20 @@ class WorkspaceLCWorkflow:
     @workflow.query
     def current_phase(self) -> str:
         return self._phase
+
+    @workflow.query
+    def subtask_status(self) -> Dict[str, str]:
+        return self._subtask_states
+
+    @workflow.query
+    def epic_status(self) -> str:
+        return self._epic.get("status", "To Do")
+
+    @workflow.query
+    def subtask_keys(self) -> List[str]:
+        """Return all subtask keys associated with this Epic."""
+        children = self._epic.get("child_stories", [])
+        return [c.get("key") for c in children if c.get("key")]
 
     # ------------------------------------------------------------------
     # Main execution
@@ -117,6 +140,15 @@ class WorkspaceLCWorkflow:
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )
+
+        # NEW: Move Epic to Planning immediately after ingest
+        await workflow.execute_activity(
+            transition_to_planning,
+            args=[epic_id],
+            schedule_to_close_timeout=timedelta(minutes=1),
+            retry_policy=_DEFAULT_RETRY,
+        )
+        self._epic["status"] = "Planning"
 
         # Phase 2: Spec v1 & Plan Approval
         self._phase = "PLAN_APPROVAL"
@@ -147,6 +179,16 @@ class WorkspaceLCWorkflow:
 
         # Phase 3: Parallel Agent Tasks
         self._phase = "PARALLEL_AGENTS"
+        
+        # NEW: Move Epic to In Progress at start of agent loops
+        await workflow.execute_activity(
+            transition_to_in_progress,
+            args=[epic_id],
+            schedule_to_close_timeout=timedelta(minutes=1),
+            retry_policy=_DEFAULT_RETRY,
+        )
+        self._epic["status"] = "In Progress"
+
         child_stories = self._epic.get("child_stories", [])
         workflow.logger.info(f"[Phase 3] Launching {len(child_stories)} parallel agent loops.")
 
@@ -155,70 +197,125 @@ class WorkspaceLCWorkflow:
             sid = story["key"]
             sumry = story["summary"]
             epic_desc = self._epic.get("description", "")
+            self._subtask_states[sid] = "TO_DO"
             
-            # 1. NEW: Generate local plan dynamically
-            plan_steps = await workflow.execute_activity(
-                generate_subtask_plan,
-                args=[sid, sumry, epic_desc],
-                schedule_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_DEFAULT_RETRY,
-            )
+            # Wrap subtask logic in try/except to catch failures
+            try:
+                # 1. NEW: Generate local plan dynamically
+                self._subtask_states[sid] = "PLANNING"
+                
+                # Update Jira to In Progress
+                await workflow.execute_activity(
+                    transition_to_in_progress,
+                    args=[sid],
+                    schedule_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=_DEFAULT_RETRY,
+                )
 
-            # 2. Post local plan to subtask
-            plan_comment = "📅 **Implementation Approach**\n" + "\n".join([f"- {s}" for s in plan_steps])
-            await workflow.execute_activity(
-                update_jira_comment,
-                args=[sid, plan_comment],
-                schedule_to_close_timeout=timedelta(minutes=1),
-                retry_policy=_DEFAULT_RETRY,
-            )
+                plan_steps = await workflow.execute_activity(
+                    generate_subtask_plan,
+                    args=[sid, sumry, epic_desc],
+                    schedule_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=_DEFAULT_RETRY,
+                )
 
-            # 3. Execute Resolution
-            res = await workflow.execute_activity(
-                execute_agent_resolution,
-                args=[sid, sumry, plan_steps],
-                schedule_to_close_timeout=timedelta(minutes=5),
-                retry_policy=_DEFAULT_RETRY,
-            )
-            
-            # 2. Notify Jira that agent is done and waiting for approval
-            await workflow.execute_activity(
-                update_jira_comment,
-                args=[sid, f"Agent has completed the resolution for `{sid}`. Please review the findings and approve."],
-                schedule_to_close_timeout=timedelta(minutes=1),
-                retry_policy=_DEFAULT_RETRY,
-            )
-            
-            # 3. Wait for individual approval
-            workflow.logger.info(f"Agent loop {sid} waiting for 'approve_subtask'...")
-            await workflow.wait_condition(lambda: self._subtask_approvals.get(sid, False))
+                # NEW: Write dedicated subtask spec to sub-tasks/
+                await workflow.execute_activity(
+                    write_subtask_spec,
+                    args=[sid, sumry, plan_steps, epic_desc],
+                    schedule_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=_DEFAULT_RETRY,
+                )
 
-            # NEW: Post approval stamp to the subtask
-            await workflow.execute_activity(
-                update_jira_comment,
-                args=[sid, "✅ **Human Approval Stamp**: Resolution reviewed and approved by workspace manager."],
-                schedule_to_close_timeout=timedelta(minutes=1),
-                retry_policy=_DEFAULT_RETRY,
-            )
+                # 2. Post local plan to subtask
+                plan_comment = "📅 **Implementation Approach**\n" + "\n".join([f"- {s}" for s in plan_steps])
+                await workflow.execute_activity(
+                    update_jira_comment,
+                    args=[sid, plan_comment],
+                    schedule_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=_DEFAULT_RETRY,
+                )
 
-            # 4. Final Transition to "Done"
-            await workflow.execute_activity(
-                close_jira_issue,
-                args=[sid, "Agent resolution approved by human."],
-                schedule_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_DEFAULT_RETRY,
-            )
-            
-            return res
+                # 3. Execute Resolution
+                self._subtask_states[sid] = "EXECUTING"
+                res = await workflow.execute_activity(
+                    execute_agent_resolution,
+                    args=[sid, sumry, plan_steps],
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+                
+                # 4. Notify Jira that agent is done and waiting for approval
+                await workflow.execute_activity(
+                    update_jira_comment,
+                    args=[sid, f"Agent has completed the resolution for `{sid}`. Please review the findings and approve."],
+                    schedule_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+                
+                # 5. Wait for individual approval
+                self._subtask_states[sid] = "WAITING_APPROVAL"
+                workflow.logger.info(f"Agent loop {sid} waiting for 'approve_subtask' (normalized) ...")
+                await workflow.wait_condition(lambda: self._subtask_approvals.get(sid.upper(), False))
 
-        # Gather all parallel tasks
+                # 6. Post approval stamp to the subtask
+                self._subtask_states[sid] = "APPROVED"
+                await workflow.execute_activity(
+                    update_jira_comment,
+                    args=[sid, "✅ **Human Approval Stamp**: Resolution reviewed and approved by workspace manager."],
+                    schedule_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+
+                # Sync Spec Progress (MASTER EPIC and INDIVIDUAL SUBTASK)
+                await asyncio.gather(
+                    workflow.execute_activity(
+                        update_epic_spec_item,
+                        args=[epic_id, sid],
+                        start_to_close_timeout=timedelta(minutes=1),
+                        retry_policy=_DEFAULT_RETRY,
+                    ),
+                    workflow.execute_activity(
+                        complete_subtask_spec,
+                        args=[sid],
+                        start_to_close_timeout=timedelta(minutes=1),
+                        retry_policy=_DEFAULT_RETRY,
+                    )
+                )
+
+                # 7. Final Transition to "Done"
+                await workflow.execute_activity(
+                    close_jira_issue,
+                    args=[sid, "Agent resolution approved by human."],
+                    schedule_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+                
+                self._subtask_states[sid] = "DONE"
+                return res
+            except Exception as e:
+                workflow.logger.error(f"⚠️ Subtask {sid} failed: {e}")
+                self._subtask_states[sid] = "FAILED"
+                # DO NOT RERAISE - return a placeholder to keep the workflow moving
+                return f"**FAIL for {sid}**\n\nAgent encountered a task failure during processing: `{e}`"
+
+        # Gather all parallel tasks - failure in one won't crash the whole run anymore.
         agent_results = await asyncio.gather(*(run_agent_loop(s) for s in child_stories))
 
-        # Phase 4: Summarize in Spec v2
+        # NEW: Move Epic to In Review now that all subtasks are settled
+        await workflow.execute_activity(
+            transition_to_in_review,
+            args=[epic_id],
+            schedule_to_close_timeout=timedelta(minutes=1),
+            retry_policy=_DEFAULT_RETRY,
+        )
+        self._epic["status"] = "In Review"
+
+        # Phase 4: Summarize in spec_epic.md v2
         self._phase = "SUMMARY"
         await workflow.execute_activity(
             update_spec_v2,
-            args=[agent_results],
+            args=[epic_id, agent_results],
             schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=_DEFAULT_RETRY,
         )

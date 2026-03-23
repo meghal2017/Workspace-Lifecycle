@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 import sys
+import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from env_loader import load_env
@@ -49,6 +50,13 @@ from activities import (
     post_implementation_plan,
     post_spec_artifact,
     generate_subtask_plan,
+    write_subtask_spec,
+    update_epic_spec_item,
+    complete_subtask_spec,
+    transition_to_planning,
+    transition_to_in_progress,
+    transition_to_in_review,
+    transition_to_done,
 )
 from workflow import WorkspaceLCWorkflow
 
@@ -68,8 +76,15 @@ logger = logging.getLogger("workspace-worker")
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description="Temporal Worker for Workspace Lifecycle")
+    parser.add_argument("--offline", action="store_true", help="Force run in Offline Mode (ignore Jira credentials)")
+    args, _ = parser.parse_known_args()
+
     # Load .env file, overriding any stale bash session exports
     load_env(override=True)
+
+    if args.offline:
+        os.environ["JIRA_OFFLINE"] = "true"
     
     address = TEMPORAL_ADDRESS or "localhost:7233"
     is_cloud = bool(TEMPORAL_API_KEY)
@@ -109,6 +124,13 @@ async def main() -> None:
             post_implementation_plan,
             post_spec_artifact,
             generate_subtask_plan,
+            write_subtask_spec,
+            update_epic_spec_item,
+            complete_subtask_spec,
+            transition_to_planning,
+            transition_to_in_progress,
+            transition_to_in_review,
+            transition_to_done,
         ],
     ):
         logger.info(

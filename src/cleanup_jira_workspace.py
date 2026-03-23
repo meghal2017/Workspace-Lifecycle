@@ -13,28 +13,48 @@ from env_loader import load_env
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Cleanup the Jira project (or simulation).")
+    parser.add_argument("--offline", action="store_true", help="Cleanup the offline simulation instead of real Jira.")
+    args = parser.parse_known_args()[0]
+
     load_env(override=True)
-    if not jira_client.jira_enabled():
-        print("❌ Error: Jira credentials not set in environment.")
+    if args.offline:
+        os.environ["JIRA_OFFLINE"] = "true"
+        print("🛠️  Offline Mode: Preparing to wipe the simulated Jira directory...")
+        project_key = "SIM"
+    elif not jira_client.jira_enabled():
+        print("❌ Error: Jira credentials not set. Use --offline to cleanup simulated data.")
         sys.exit(1)
-
-    project_key = os.environ.get("JIRA_PROJECT_KEY")
-    if not project_key:
-        print("❌ Error: JIRA_PROJECT_KEY not found in environment.")
-        sys.exit(1)
-
-    print("⚠️  WARNING: You are about to wipe out ALL tickets in the Jira project workspace.")
-    print(f"Project Key: {project_key}")
+    else:
+        project_key = os.environ.get("JIRA_PROJECT_KEY")
+        if not project_key:
+            print("❌ Error: JIRA_PROJECT_KEY not found.")
+            sys.exit(1)
+        print(f"⚠️  WARNING: You are about to wipe out ALL tickets in Jira project '{project_key}'.")
     
-    confirm = input("Are you absolutely sure? Type 'YES' to permanently format the board: ")
-    if confirm != "YES":
+    confirm = input("Are you absolutely sure? [y/N]: ")
+    if confirm.lower() not in ("yes", "y"):
         print("Aborting cleanup.")
         sys.exit(0)
 
-    print(f"\n🗑️  Wiping Jira Project '{project_key}'...\n")
+    target = "Simulated Jira Board" if args.offline else f"Jira Project '{project_key}'"
+    print(f"\n🗑️  Wiping {target}...\n")
 
     try:
-        # Search all issues in the project
+        if args.offline:
+            # Deep clean for offline mode: Wipe the entire simulation directory
+            import shutil
+            import jira_simulator
+            sim_dir = jira_simulator.SIM_DIR
+            if os.path.exists(sim_dir):
+                print(f"   Wiping simulation directory: {sim_dir}...")
+                shutil.rmtree(sim_dir)
+                os.makedirs(sim_dir, exist_ok=True)
+            print("\n🎉 Online simulation cleanup complete! All artifacts and directories have been purged.")
+            sys.exit(0)
+
+        # Online Search all issues in the project
         jql = f'project = "{project_key}"'
         issues = await jira_client.search_issues(jql)
         
